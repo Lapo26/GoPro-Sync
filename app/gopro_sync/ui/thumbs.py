@@ -432,6 +432,7 @@ class ThumbGridView(QAbstractScrollArea):
     activated = Signal(str)
     context = Signal(str, QPoint)
     selection_changed = Signal()
+    long_pressed = Signal(str)          # mantener apretado (o Ctrl+clic fuera del modo seleccion)
     SP, HEADER_H = 18, 40
     ROW_H = THUMB_H + 18
     LRU_CAP = 240
@@ -457,6 +458,13 @@ class ThumbGridView(QAbstractScrollArea):
         # con un circulo en la esquina y textos de ayuda propios.
         self.status = {}
         self.selectable = False
+        self.click_toggles = False      # en modo seleccion de la galeria: clic = elegir / quitar
+        self._hold_timer = QTimer(self)
+        self._hold_timer.setSingleShot(True)
+        self._hold_timer.setInterval(500)
+        self._hold_timer.timeout.connect(self._on_hold)
+        self._hold_fired = False
+        self._press_pos = None
         self.selected = set()
         self.tooltips = {}
         self.accent = QColor("#00f2fe")
@@ -768,17 +776,33 @@ class ThumbGridView(QAbstractScrollArea):
 
     def mousePressEvent(self, event):
         self._press = self.path_at(event.position().toPoint()) if event.button() == Qt.MouseButton.LeftButton else None
+        self._hold_fired = False
+        self._press_pos = event.position().toPoint()
+        if self._press:
+            self._hold_timer.start()
         super().mousePressEvent(event)
 
+    def _on_hold(self):
+        if self._press:
+            self._hold_fired = True
+            if self.selectable:
+                self.toggle_selected(self._press)
+            else:
+                self.long_pressed.emit(self._press)
+
     def mouseReleaseEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
+        self._hold_timer.stop()
+        if event.button() == Qt.MouseButton.LeftButton and not self._hold_fired:
             pos = event.position().toPoint()
             path = self.path_at(pos)
             if path and path == self._press:
                 cell = self._cell_rect(path)
                 ctrl = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
-                if self.selectable and (ctrl or (cell is not None and self._check_rect(cell).contains(QPointF(pos)))):
-                    self.toggle_selected(path)      # circulo de la esquina (o Ctrl+clic): seleccionar
+                on_circle = cell is not None and self._check_rect(cell).contains(QPointF(pos))
+                if self.selectable and (ctrl or on_circle or self.click_toggles):
+                    self.toggle_selected(path)      # circulo, Ctrl+clic o modo seleccion: elegir
+                elif ctrl:
+                    self.long_pressed.emit(path)    # Ctrl+clic entra en modo seleccion
                 else:
                     self.activated.emit(path)
         self._press = None

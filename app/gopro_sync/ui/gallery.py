@@ -4,8 +4,8 @@ import re
 from datetime import datetime
 from datetime import timedelta
 from PySide6.QtCore import QDate, QTimer, Qt
-from PySide6.QtWidgets import QApplication, QDateEdit, QDialog, QHBoxLayout, QLabel, QMenu, QPushButton, QVBoxLayout, QWidget
-from ..i18n import short_path, tr
+from PySide6.QtWidgets import QFrame, QApplication, QDateEdit, QDialog, QHBoxLayout, QLabel, QMenu, QPushButton, QVBoxLayout, QWidget
+from ..i18n import _human_size, short_path, tr
 from ..winshell import move_to_recycle_bin, show_in_explorer
 from ..sound import SoundManager
 from ..media import is_broken_mp4
@@ -87,8 +87,31 @@ class GalleryBase(QWidget):
         self.view = ThumbGridView(self)
         self.view.activated.connect(self._open_item)
         self.view.context.connect(self._show_context_menu)
+        self.view.long_pressed.connect(self.enter_selection)
+        self.view.selection_changed.connect(self._update_selection_bar)
         self.scroll = self.view
         outer.addWidget(self.view)
+        # Barra del modo seleccion (mantener apretado o Ctrl+clic sobre un video)
+        self.sel_bar = QFrame()
+        self.sel_bar.setStyleSheet(
+            "QFrame { background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12); border-radius: 12px; }"
+            " QLabel { border: none; background: transparent; color: #fff; font-size: 13px; font-weight: 700; }"
+            " QPushButton { background: rgba(255,255,255,0.08); color: #fff; border: 1px solid rgba(255,255,255,0.14);"
+            " border-radius: 10px; padding: 8px 16px; font-weight: 600; } QPushButton:hover { background: rgba(255,255,255,0.16); }"
+            " QPushButton:disabled { color: rgba(255,255,255,0.35); }")
+        bar = QHBoxLayout(self.sel_bar)
+        bar.setContentsMargins(16, 8, 10, 8)
+        self.lbl_sel = QLabel("")
+        self.btn_sel_join = QPushButton(tr(lang, "sel_join"))
+        self.btn_sel_join.clicked.connect(self._join_selected)
+        self.btn_sel_cancel = QPushButton(tr(lang, "sel_cancel"))
+        self.btn_sel_cancel.clicked.connect(self.exit_selection)
+        bar.addWidget(self.lbl_sel)
+        bar.addStretch()
+        bar.addWidget(self.btn_sel_join)
+        bar.addWidget(self.btn_sel_cancel)
+        self.sel_bar.hide()
+        outer.addWidget(self.sel_bar)
 
         self._empty_icon = empty_icon
         self.empty_lbl = QLabel(f"{empty_icon}\n{empty_text}")
@@ -143,6 +166,48 @@ class GalleryBase(QWidget):
     def show_empty(self):
         self.scroll.hide()
         self.empty_lbl.show()
+
+    # ---- modo seleccion (como en la sincronizacion de la camara)
+    def enter_selection(self, path=None):
+        self.view.selectable = True
+        self.view.click_toggles = True
+        self.view.selected = {path} if path else set()
+        self.btn_sel_join.setVisible(self.KIND == "video")
+        self.sel_bar.show()
+        self.view.viewport().update()
+        self._update_selection_bar()
+
+    def exit_selection(self):
+        self.view.selectable = False
+        self.view.click_toggles = False
+        self.view.selected = set()
+        self.sel_bar.hide()
+        self.view.viewport().update()
+
+    def _update_selection_bar(self):
+        if not self.view.selectable:
+            return
+        sel = [x for x in self.view.selected if x in self.view.files]
+        total = 0
+        for x in sel:
+            try:
+                total += os.path.getsize(x)
+            except OSError:
+                pass
+        self.lbl_sel.setText(tr(self.lang, "sel_count", n=len(sel), size=_human_size(total)))
+        self.btn_sel_join.setEnabled(len(sel) >= 2)
+
+    def _join_selected(self):
+        sel = [x for x in self.view.files if x in self.view.selected]
+        main = self.window()
+        if hasattr(main, "join_selected") and main.join_selected(sel):
+            self.exit_selection()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape and self.view.selectable:
+            self.exit_selection()
+        else:
+            super().keyPressEvent(event)
 
     def _forget_missing(self, path):
         """El archivo se borro o movio por fuera de la app: sacarlo de la galeria."""

@@ -17,7 +17,7 @@ from ..env import (
 from ..i18n import tr
 from ..winshell import TaskbarProgress, apply_dark_titlebar, bring_to_front, set_autostart, show_in_explorer
 from ..fileops import JOINED_PARTS
-from ..videotools import find_chapter_groups, join_job, light_version_job, repair_job
+from ..videotools import find_chapter_groups, join_job, light_version_job, repair_job, selection_join_group
 from ..ui.graphics import (
     install_qt_translations,
     add_text_shadow,
@@ -512,6 +512,21 @@ class MainWindow(QWidget):
                 pass
         self.config["joined_parts"] = sorted(JOINED_PARTS)
         save_config(self.config)
+
+    def join_selected(self, paths):
+        """Unir los videos elegidos en la galeria. True si se puso en marcha."""
+        group, error = selection_join_group(paths, self.lang)
+        if error:
+            show_toast(self, error)
+            return False
+
+        def done(ok, stats):
+            if stats.get("copied"):
+                self.videos_page.refresh()
+        self.show_activity()
+        self.sync_page.start_tool(tr(self.lang, "join_sel_title", n=len(group["parts"])),
+                                  [join_job(group, self.lang, False)], done)
+        return True
 
     def join_groups(self, groups, recycle=False):
         jobs = [join_job(g, self.lang, recycle, on_joined=self._remember_joined) for g in groups]

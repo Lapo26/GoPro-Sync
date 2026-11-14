@@ -236,6 +236,40 @@ def find_chapter_groups_in_dir(d):
     return out
 
 
+def selection_join_group(paths, lang):
+    """Arma un grupo para unir videos elegidos a mano. Devuelve (grupo, error).
+    Solo se unen sin recomprimir si tienen la misma resolucion, velocidad de
+    cuadros y formatos (si no, el video resultante saldria roto)."""
+    if len(paths) < 2:
+        return None, tr(lang, "join_need_two")
+    def when(x):
+        try:
+            return (os.path.getmtime(x), os.path.basename(x).upper())
+        except OSError:
+            return (0, os.path.basename(x).upper())
+    paths = sorted(paths, key=when)                 # orden de grabacion
+    sig_first = None
+    for x in paths:
+        if is_broken_mp4(x):
+            return None, tr(lang, "join_damaged_sel", name=os.path.basename(x))
+        info = read_mp4_info(x)
+        v, a = info.get("video") or {}, info.get("audio") or {}
+        sig = (v.get("codec"), v.get("w"), v.get("h"), v.get("timescale"), v.get("delta"), a.get("codec"), a.get("timescale"))
+        if sig_first is None:
+            sig_first = (sig, x)
+        elif sig != sig_first[0]:
+            return None, tr(lang, "join_incompatible", a=os.path.basename(sig_first[1]), b=os.path.basename(x))
+    first = paths[0]
+    base = os.path.splitext(os.path.basename(first))[0]
+    out = os.path.join(os.path.dirname(first), f"{base}_unido.MP4")
+    n = 2
+    while os.path.exists(out):
+        out = os.path.join(os.path.dirname(first), f"{base}_unido_{n}.MP4")
+        n += 1
+    return {"name": os.path.basename(first), "parts": paths, "output": out, "damaged": [], "missing": [],
+            "size": sum(os.path.getsize(x) for x in paths), "done": False}, None
+
+
 def join_job(group, lang, recycle_parts, on_joined=None):
     """Une las partes sin recomprimir (video, audio y la pista GPS)."""
     def run(progress, cancel):
