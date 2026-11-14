@@ -189,7 +189,9 @@ def find_chapter_groups(root):
             continue                  # falta la primera parte
         paths = [x for _o, x in parts]
         joined = os.path.join(d, f"GOPR{num}_unido.MP4")
-        out.append({"name": os.path.basename(paths[0]), "parts": paths, "output": joined,
+        orders = [o for o, _x in parts]
+        missing = [f"GP{k:02d}{num}.MP4" for k in range(1, max(orders) + 1) if k not in orders]
+        out.append({"name": os.path.basename(paths[0]), "parts": paths, "output": joined, "missing": missing,
                     "size": sum(os.path.getsize(x) for x in paths),
                     "damaged": [os.path.basename(x) for x in paths if is_broken_mp4(x)],
                     "done": os.path.exists(joined)})
@@ -224,7 +226,9 @@ def find_chapter_groups_in_dir(d):
         parts.sort()
         if len(parts) >= 2 and parts[0][0] == 0:
             paths = [x for _o, x in parts]
+            orders = [o for o, _x in parts]
             out.append({"name": os.path.basename(paths[0]), "parts": paths,
+                        "missing": [f"GP{k:02d}{num}.MP4" for k in range(1, max(orders) + 1) if k not in orders],
                         "output": os.path.join(d, f"GOPR{num}_unido.MP4"),
                         "size": sum(os.path.getsize(x) for x in paths),
                         "damaged": [os.path.basename(x) for x in paths if is_broken_mp4(x)],

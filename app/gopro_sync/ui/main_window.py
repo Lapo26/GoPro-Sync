@@ -19,6 +19,7 @@ from ..winshell import TaskbarProgress, apply_dark_titlebar, bring_to_front, set
 from ..fileops import JOINED_PARTS
 from ..videotools import find_chapter_groups, join_job, light_version_job, repair_job
 from ..ui.graphics import (
+    install_qt_translations,
     add_text_shadow,
     apply_popup_style,
     boot_step,
@@ -452,6 +453,7 @@ class MainWindow(QWidget):
         self.sync_page.folder_changed.emit(new_dir)
 
     def on_language_change(self, new_lang):
+        install_qt_translations(new_lang)
         self.lang = new_lang
         self.sync_page.lang = new_lang
         self.retranslate_ui()

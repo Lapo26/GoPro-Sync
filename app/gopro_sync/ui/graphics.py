@@ -9,6 +9,28 @@ from ..i18n import tr
 _EMOJI_ICON_CACHE = {}
 
 
+_QT_TRANSLATORS = []
+
+
+def install_qt_translations(lang):
+    """Traduce los textos propios de Qt (Aceptar/Cancelar, selector de color,
+    calendario, menu Copiar/Pegar...) al idioma de la app. Sin esto salian en ingles."""
+    from PySide6.QtCore import QCoreApplication, QLibraryInfo, QLocale, QTranslator
+    app = QCoreApplication.instance()
+    if app is None:
+        return
+    for t in _QT_TRANSLATORS:
+        app.removeTranslator(t)
+    _QT_TRANSLATORS.clear()
+    QLocale.setDefault(QLocale({"es": "es_ES", "de": "de_DE"}.get(lang, "en_US")))
+    path = QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)
+    for base in ("qtbase", "qt"):
+        t = QTranslator()
+        if t.load(f"{base}_{lang}", path):
+            app.installTranslator(t)
+            _QT_TRANSLATORS.append(t)
+
+
 def emoji_icon(ch, px=18):
     """Emoji dibujado como icono con UNA sola fuente (Segoe UI Emoji): unos ms,
     sin la busqueda de fuentes de reserva."""

@@ -13,7 +13,7 @@ from .winshell import autostart_registered, bring_to_front, install_dark_titleba
 from .sound import ClickSoundFilter, SoundManager
 from .camera import GPHOTO
 from .videotools import ffmpeg_exe
-from .ui.graphics import GlowHoverAnimator, load_app_icon, set_boot_progress
+from .ui.graphics import GlowHoverAnimator, install_qt_translations, load_app_icon, set_boot_progress
 from .ui.main_window import AnimatedSplash, MainWindow, setup_tray
 
 def main():
@@ -23,6 +23,7 @@ def main():
     install_dark_titlebars(app)       # respaldo: otras ventanas, al recibir el foco
 
     config = load_config()
+    install_qt_translations(config.get("language", "es"))
     # "Iniciar con Windows" puede haberlo activado el instalador (o quitado el
     # usuario desde Windows): Ajustes muestra el estado real.
     real = autostart_registered()

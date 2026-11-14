@@ -51,6 +51,12 @@ TRANSLATIONS = {
         "cam_preview_loading": "Vorschau wird von der Kamera geholt…",
         "cam_preview_failed": "Die Vorschau konnte nicht von der Kamera geholt werden.",
         "cam_view_btn": "Dateien der Kamera ansehen",
+        "join_missing": "{name}: Teil {part} fehlt (das Video hätte eine Lücke).",
+        "capture_frame": "Dieses Bild als Foto speichern",
+        "map_toggle": "Route auf der Karte anzeigen",
+        "fullscreen_toggle": "Vollbild (F11)",
+        "select_all": "Alle auswählen",
+        "join_selected": "{n} von {total} ausgewählt · {size}",
         "file_gone": "{name} ist nicht mehr da (gelöscht oder verschoben).",
         "player_loading": "Video wird geladen…",
         "video_broken_msg": "{name} ist beschädigt und kann nicht abgespielt werden. Rechtsklick → Reparatur versuchen.",
@@ -412,6 +418,12 @@ TRANSLATIONS = {
         "cam_preview_loading": "Getting the preview from the camera…",
         "cam_preview_failed": "Could not get the preview from the camera.",
         "cam_view_btn": "View camera files",
+        "join_missing": "{name}: part {part} is missing (joining would leave a gap in the video).",
+        "capture_frame": "Save this frame as a photo",
+        "map_toggle": "Show the route on the map",
+        "fullscreen_toggle": "Full screen (F11)",
+        "select_all": "Select all",
+        "join_selected": "{n} of {total} selected · {size}",
         "file_gone": "{name} is no longer there (deleted or moved).",
         "player_loading": "Loading video…",
         "video_broken_msg": "{name} is damaged and cannot be played. Right-click → Try to repair.",
@@ -773,6 +785,12 @@ TRANSLATIONS = {
         "cam_preview_loading": "Trayendo la vista previa desde la cámara…",
         "cam_preview_failed": "No se pudo traer la vista previa de la cámara.",
         "cam_view_btn": "Ver archivos de la cámara",
+        "join_missing": "{name}: falta la parte {part} (unirlo dejaría un salto en el video).",
+        "capture_frame": "Guardar este cuadro como foto",
+        "map_toggle": "Ver el recorrido en el mapa",
+        "fullscreen_toggle": "Pantalla completa (F11)",
+        "select_all": "Seleccionar todos",
+        "join_selected": "{n} de {total} elegidos · {size}",
         "file_gone": "{name} ya no está (se borró o se movió).",
         "player_loading": "Cargando video…",
         "video_broken_msg": "{name} está dañado y no se puede reproducir. Clic derecho → Intentar reparar.",
@@ -1114,8 +1132,8 @@ def strip_emoji(text):
 
 
 def tr(lang, key, **kwargs):
-    table = TRANSLATIONS.get(lang, TRANSLATIONS["de"])
-    text = strip_emoji(table.get(key, TRANSLATIONS["de"].get(key, key)))
+    table = TRANSLATIONS.get(lang, TRANSLATIONS["en"])
+    text = strip_emoji(table.get(key, TRANSLATIONS["en"].get(key, TRANSLATIONS["de"].get(key, key))))
     if kwargs:
         try:
             return text.format(**kwargs)

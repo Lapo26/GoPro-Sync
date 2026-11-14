@@ -31,6 +31,7 @@ class TileMapWidget(QWidget):
         self.setCursor(Qt.CursorShape.OpenHandCursor)
         self.tile_loaded.connect(lambda _k: self.update())
         self._fitted = False
+        self.marker = None          # indice del punto actual (reproductor)
 
     @staticmethod
     def _world(lat, lon, z):
@@ -128,6 +129,12 @@ class TileMapWidget(QWidget):
                 painter.setPen(QPen(QColor("#ffffff"), 2))
                 painter.setBrush(QColor(color))
                 painter.drawEllipse(QPointF(x - left, y - top), 7, 7)
+            if self.marker is not None and 0 <= self.marker < len(self.points):
+                pnt = self.points[self.marker]
+                x, y = self._world(pnt[0], pnt[1], z)
+                painter.setPen(QPen(QColor("#0d0d12"), 3))
+                painter.setBrush(QColor("#ffffff"))
+                painter.drawEllipse(QPointF(x - left, y - top), 9, 9)
         # Atribucion obligatoria de OpenStreetMap
         text = "© OpenStreetMap contributors"
         f = painter.font()
@@ -169,6 +176,15 @@ class TileMapWidget(QWidget):
         self.cx = wx * f - pos.x() + self.width() / 2
         self.cy = wy * f - pos.y() + self.height() / 2
         self.update()
+
+    def set_progress(self, fraction):
+        """Mueve el punto blanco a la parte del recorrido que se esta viendo."""
+        if not self.points:
+            return
+        idx = int(max(0.0, min(1.0, fraction)) * (len(self.points) - 1))
+        if idx != self.marker:
+            self.marker = idx
+            self.update()
 
     def shutdown(self):
         try:

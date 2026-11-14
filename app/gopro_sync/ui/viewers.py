@@ -1,17 +1,46 @@
 """Reproductor de video y visor de fotos."""
 import os
-from PySide6.QtCore import QRectF, QSize, QTimer, QUrl, Qt
-from PySide6.QtGui import QIcon, QPainter, QPixmap
+from PySide6.QtCore import QPointF, QRectF, QSize, QTimer, QUrl, Qt
+from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtMultimedia import QAudioOutput, QMediaMetaData, QMediaPlayer, QVideoSink
 from PySide6.QtMultimediaWidgets import QVideoWidget
-from PySide6.QtWidgets import QDialog, QGraphicsScene, QGraphicsView, QHBoxLayout, QLabel, QPushButton, QSlider, QStackedWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (QDialog, QGraphicsScene, QGraphicsView, QHBoxLayout, QLabel, QPushButton, QSlider,
+                               QSplitter, QStackedWidget, QVBoxLayout, QWidget)
 from ..env import FONT_STACK
 from ..i18n import tr
 from ..sound import SoundManager
-from ..media import _read_moov
+from ..media import _read_moov, read_gopro_track
 from ..workers import ScanThread
 from ..ui.graphics import emoji_icon
 from ..ui.widgets import VideoFrameView, save_captured_photo, show_toast
+
+def fullscreen_icon(px=18, leave=False):
+    """Icono de pantalla completa dibujado (las 4 esquinas): sin depender de
+    una fuente de emojis."""
+    pm = QPixmap(px * 2, px * 2)
+    pm.setDevicePixelRatio(2.0)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    pen = QPen(QColor("#ffffff"), 1.8)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    p.setPen(pen)
+    m, L, s = 2.5, 5.5, px - 2.5
+    for cx, cy, dx, dy in ((m, m, 1, 1), (s, m, -1, 1), (m, s, 1, -1), (s, s, -1, -1)):
+        if leave:                     # salir: esquinas hacia adentro
+            cx, cy, dx, dy = cx + dx * L, cy + dy * L, -dx, -dy
+        p.drawLine(QPointF(cx, cy), QPointF(cx + dx * L, cy))
+        p.drawLine(QPointF(cx, cy), QPointF(cx, cy + dy * L))
+    p.end()
+    return QIcon(pm)
+
+
+def toggle_fullscreen(window):
+    if window.isFullScreen():
+        window.showNormal()
+    else:
+        window.showFullScreen()
+
 
 class VideoPlayerDialog(QDialog):
     """Eigener Video-Player mit richtiger Steuerleiste (Play/Pause, Zeit-
@@ -51,7 +80,14 @@ class VideoPlayerDialog(QDialog):
         self.pan_view = VideoFrameView(radius=0)  # nur fuer 360-Modus
         self.stack.addWidget(self.video_widget)
         self.stack.addWidget(self.pan_view)
-        layout.addWidget(self.stack, 1)
+        # Video a la izquierda; el mapa del recorrido (si el video tiene GPS) a la derecha
+        self.split = QSplitter(Qt.Orientation.Horizontal)
+        self.split.setStyleSheet("QSplitter::handle { background: #222; width: 3px; }")
+        self.split.addWidget(self.stack)
+        self.map_panel = None
+        self._track = None
+        layout.addWidget(self.split, 1)
+        self.video_widget.mouseDoubleClickEvent = lambda e: self.toggle_fullscreen()
 
         controls = QWidget()
         controls.setStyleSheet("background: #15151c;")
@@ -105,9 +141,21 @@ class VideoPlayerDialog(QDialog):
         self.btn_360.clicked.connect(self.toggle_360_mode)
         c_layout.addWidget(self.btn_360)
 
-        self.btn_capture = _round_btn("📷", "Frame speichern")
+        self.btn_capture = _round_btn("📷", tr(self.lang, "capture_frame"))
         self.btn_capture.clicked.connect(self.capture_frame)
         c_layout.addWidget(self.btn_capture)
+
+        # Mapa: aparece solo si el video tiene GPS (se lee en segundo plano)
+        self.btn_map = _round_btn("🗺", tr(self.lang, "map_toggle"))
+        self.btn_map.setCheckable(True)
+        self.btn_map.hide()
+        self.btn_map.clicked.connect(self.toggle_map)
+        c_layout.addWidget(self.btn_map)
+
+        self.btn_full = _round_btn("📷", tr(self.lang, "fullscreen_toggle"))
+        self.btn_full.setIcon(fullscreen_icon())
+        self.btn_full.clicked.connect(self.toggle_fullscreen)
+        c_layout.addWidget(self.btn_full)
 
         layout.addWidget(controls)
 
@@ -149,6 +197,31 @@ class VideoPlayerDialog(QDialog):
         th = ScanThread(0, lambda: _read_moov(self._path))
         th.done.connect(lambda _t, _r: self._open_media())
         th.start()
+        gps = ScanThread(0, read_gopro_track, self._path)
+        gps.done.connect(self._on_track)
+        gps.start()
+
+    def _on_track(self, _t, track):
+        if track and track.get("points"):
+            self._track = track
+            self.btn_map.show()
+
+    def toggle_map(self):
+        SoundManager.play_click()
+        if self.map_panel is None and self._track:
+            from ..ui.map import TileMapWidget
+            accent = getattr(self.window().parent(), "get_current_theme_color", lambda: "#00f2fe")() \
+                if self.parent() is not None else "#00f2fe"
+            self.map_panel = TileMapWidget(self._track["points"], accent, self)
+            self.map_panel.setMinimumSize(320, 240)
+            self.split.addWidget(self.map_panel)
+            self.split.setSizes([max(400, self.width() - 420), 420])
+        if self.map_panel is not None:
+            self.map_panel.setVisible(self.btn_map.isChecked())
+
+    def toggle_fullscreen(self):
+        toggle_fullscreen(self)
+        self.btn_full.setIcon(fullscreen_icon(leave=self.isFullScreen()))
 
     def _open_media(self):
         if not self.isVisible():
@@ -261,6 +334,8 @@ class VideoPlayerDialog(QDialog):
     def on_position_changed(self, pos):
         if not self.slider_seek.isSliderDown():
             self.slider_seek.setValue(pos)
+        if self.map_panel is not None and self.map_panel.isVisible() and self.player.duration():
+            self.map_panel.set_progress(pos / self.player.duration())
         self._update_time_label(pos, self.player.duration())
 
     def on_duration_changed(self, dur):
@@ -276,11 +351,17 @@ class VideoPlayerDialog(QDialog):
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Space:
             self.toggle_play()
+        elif event.key() in (Qt.Key.Key_F11, Qt.Key.Key_F):
+            self.toggle_fullscreen()
+        elif event.key() == Qt.Key.Key_Escape and self.isFullScreen():
+            self.toggle_fullscreen()          # Esc sale de pantalla completa (no cierra)
         else:
             super().keyPressEvent(event)
 
     def closeEvent(self, event):
         self.player.stop()
+        if self.map_panel is not None:
+            self.map_panel.shutdown()
         super().closeEvent(event)
 
 
@@ -320,7 +401,34 @@ class ImageViewerDialog(QDialog):
         self.view.mouseDoubleClickEvent = lambda event: self._fit_to_view()
         layout.addWidget(self.view)
 
+        # Boton de pantalla completa sobre la foto (arriba a la derecha); F11 o F tambien.
+        self.btn_full = QPushButton(self)
+        self.btn_full.setIcon(fullscreen_icon())
+        self.btn_full.setIconSize(QSize(18, 18))
+        self.btn_full.setFixedSize(38, 38)
+        self.btn_full.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_full.setStyleSheet("QPushButton { background: rgba(0,0,0,0.55); border-radius: 19px; border: none; }"
+                                    " QPushButton:hover { background: rgba(255,255,255,0.2); }")
+        self.btn_full.clicked.connect(self.toggle_fullscreen)
         QTimer.singleShot(0, self._fit_to_view)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.btn_full.move(self.width() - 50, 12)
+        self.btn_full.raise_()
+        QTimer.singleShot(0, self._fit_to_view)
+
+    def toggle_fullscreen(self):
+        toggle_fullscreen(self)
+        self.btn_full.setIcon(fullscreen_icon(leave=self.isFullScreen()))
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key.Key_F11, Qt.Key.Key_F):
+            self.toggle_fullscreen()
+        elif event.key() == Qt.Key.Key_Escape and self.isFullScreen():
+            self.toggle_fullscreen()
+        else:
+            super().keyPressEvent(event)
 
     def _fit_to_view(self):
         self.view.resetTransform()

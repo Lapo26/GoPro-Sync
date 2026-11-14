@@ -4,7 +4,8 @@ import shutil
 from datetime import datetime
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QApplication, QDialog, QFileDialog, QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea, QStackedWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (QApplication, QDialog, QFileDialog, QGridLayout, QHBoxLayout, QLabel, QListWidget,
+                               QListWidgetItem, QPushButton, QScrollArea, QStackedWidget, QVBoxLayout, QWidget)
 from ..env import FONT_STACK, _safe_local_dir, _valid_start_dir
 from ..i18n import _human_size, tr, wrap_path
 from ..winshell import show_in_explorer
@@ -621,35 +622,52 @@ class JoinDialog(QDialog):
         intro.setStyleSheet("font-size: 12px; color: rgba(255,255,255,0.65);")
         lay.addWidget(title)
         lay.addWidget(intro)
-        box = QWidget()
-        bl = QVBoxLayout(box)
-        bl.setContentsMargins(0, 4, 0, 4)
-        bl.setSpacing(6)
-        self.toggles = []
+        # Lista con casillas: se puede recorrer toda (rueda o barra) y marcar cada video
+        self.list = QListWidget()
+        self.list.setStyleSheet(
+            f"QListWidget {{ background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.10);"
+            f" border-radius: 10px; padding: 4px; color: #fff; font-size: 13px; outline: none; }}"
+            f" QListWidget::item {{ padding: 7px 6px; border-radius: 6px; }}"
+            f" QListWidget::item:hover {{ background: rgba(255,255,255,0.06); }}"
+            f" QListWidget::item:selected {{ background: rgba(255,255,255,0.08); color: #fff; }}"
+            f" QListWidget::indicator {{ width: 18px; height: 18px; border-radius: 5px;"
+            f" border: 2px solid rgba(255,255,255,0.45); background: transparent; }}"
+            f" QListWidget::indicator:checked {{ background: {accent}; border-color: {accent}; }}")
+        self.list.setMinimumHeight(260)
+        self.items = []
         for g in self.groups:
             folder = os.path.basename(os.path.dirname(g["parts"][0]))
-            if g["damaged"]:
-                lbl = QLabel(tr(lang, "join_damaged", name=f"{folder} · {g['name']}", part=", ".join(g["damaged"])))
-                lbl.setWordWrap(True)
-                lbl.setStyleSheet("font-size: 12px; color: #ff8a8a;")
-                bl.addWidget(lbl)
+            name = f"{folder} · {g['name']}"
+            if g["damaged"] or g.get("missing"):
+                it = QListWidgetItem(tr(lang, "join_damaged", name=name, part=", ".join(g["damaged"])) if g["damaged"]
+                                     else tr(lang, "join_missing", name=name, part=", ".join(g["missing"])))
+                it.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                it.setForeground(QColor("#ff8a8a"))
+                self.list.addItem(it)
                 continue
-            t = ToggleSwitch(tr(lang, "join_group", name=f"{folder} · {g['name']}", n=len(g["parts"]),
-                                size=_human_size(g["size"])))
-            t.set_accent(accent)
-            t.setChecked(True, animate=False)
-            t.toggled.connect(lambda _s: self._update())
-            self.toggles.append((t, g))
-            bl.addWidget(t)
+            it = QListWidgetItem(tr(lang, "join_group", name=name, n=len(g["parts"]), size=_human_size(g["size"])))
+            it.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsSelectable)
+            it.setCheckState(Qt.CheckState.Checked)
+            self.list.addItem(it)
+            self.items.append((it, g))
         if not self.groups:
-            none = QLabel(tr(lang, "join_none"))
-            none.setStyleSheet("font-size: 13px; color: rgba(255,255,255,0.6);")
-            bl.addWidget(none)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(box)
-        scroll.setMinimumHeight(min(360, 40 + 34 * max(1, len(self.groups))))
-        lay.addWidget(scroll, 1)
+            it = QListWidgetItem(tr(lang, "join_none"))
+            it.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            self.list.addItem(it)
+        self.list.itemChanged.connect(lambda _i: self._update())
+        lay.addWidget(self.list, 1)
+        sel_row = QHBoxLayout()
+        self.lbl_count = QLabel("")
+        self.lbl_count.setStyleSheet(f"font-size: 12px; color: {accent};")
+        btn_all = QPushButton(tr(lang, "select_all"))
+        btn_none = QPushButton(tr(lang, "cam_select_none"))
+        btn_all.clicked.connect(lambda: self._set_all(True))
+        btn_none.clicked.connect(lambda: self._set_all(False))
+        sel_row.addWidget(self.lbl_count)
+        sel_row.addStretch()
+        sel_row.addWidget(btn_all)
+        sel_row.addWidget(btn_none)
+        lay.addLayout(sel_row)
         self.chk_recycle = ToggleSwitch(tr(lang, "join_recycle"))
         self.chk_recycle.set_accent(accent)
         lay.addWidget(self.chk_recycle)
@@ -670,10 +688,20 @@ class JoinDialog(QDialog):
         self._update()
 
     def chosen(self):
-        return [g for t, g in self.toggles if t.isChecked()]
+        return [g for it, g in self.items if it.checkState() == Qt.CheckState.Checked]
+
+    def _set_all(self, checked):
+        state = Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
+        self.list.blockSignals(True)
+        for it, _g in self.items:
+            it.setCheckState(state)
+        self.list.blockSignals(False)
+        self._update()
 
     def _update(self):
         sel = self.chosen()
+        self.lbl_count.setText(tr(self.lang, "join_selected", n=len(sel), total=len(self.items),
+                                  size=_human_size(sum(g["size"] for g in sel))))
         self.btn_ok.setText(tr(self.lang, "join_start", n=len(sel)))
         need = sum(g["size"] for g in sel)
         ok = bool(sel)

@@ -246,7 +246,7 @@ class GalleryBase(QWidget):
             if os.path.exists(path) and os.path.getsize(path) > 0 and is_broken_mp4(path):
                 menu.addAction(tr(self.lang, "ctx_repair"), lambda: main.repair_video(path))
             group = chapter_group_of(path)
-            if group and not group["done"] and not group["damaged"]:
+            if group and not group["done"] and not group["damaged"] and not group.get("missing"):
                 menu.addAction(tr(self.lang, "ctx_join", n=len(group["parts"])), lambda: main.join_groups([group]))
         menu.addSeparator()
         menu.addAction(tr(self.lang, "ctx_delete"), lambda: self.delete_file(path))
@@ -482,7 +482,7 @@ class VideoGallery(GalleryBase):
                 groups = find_chapter_groups(self.folder)
             except Exception:
                 groups = []
-            return [g for g in groups if not g["done"] and not g["damaged"]]
+            return [g for g in groups if not g["done"] and not g["damaged"] and not g.get("missing")]
         th = ScanThread(0, lambda: scan())
         th.done.connect(lambda _t, groups: self._show_join(groups))
         th.start()
