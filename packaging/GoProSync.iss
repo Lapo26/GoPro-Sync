@@ -37,8 +37,16 @@ VersionInfoDescription=Instalador de {#AppName}
 DefaultDirName={autopf}\{#AppName}
 ; Pagina "Seleccionar carpeta del menu Inicio", con la opcion de no crearla
 DefaultGroupName={#AppName}
-DisableProgramGroupPage=no
 AllowNoIcons=yes
+; Actualizacion: si ya esta instalada (mismo AppId), no vuelve a preguntar la
+; carpeta de instalacion ni la del menu Inicio, y conserva las tareas elegidas
+; antes (escritorio, iniciar con Windows). En una instalacion nueva si pregunta.
+DisableDirPage=auto
+DisableProgramGroupPage=auto
+UsePreviousAppDir=yes
+UsePreviousGroup=yes
+UsePreviousTasks=yes
+UsePreviousPrivileges=yes
 ; Por defecto se instala solo para el usuario actual (sin pedir administrador);
 ; el asistente ofrece instalar para todos los usuarios.
 PrivilegesRequired=lowest
@@ -61,6 +69,17 @@ RestartApplications=no
 Name: "spanish"; MessagesFile: "compiler:Languages\Spanish.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "german"; MessagesFile: "compiler:Languages\German.isl"
+
+[CustomMessages]
+spanish.UpgradeTitle=Actualizar %1
+spanish.UpgradeNotice=Se va a actualizar %1 de la versión %2 a la %3.%n%nTu configuración, tu biblioteca de fotos y videos y tus respaldos se conservan: el instalador solo reemplaza el programa.
+spanish.SameVersionNotice=%1 %2 ya está instalado: se va a reinstalar. Tu configuración, tu biblioteca y tus respaldos se conservan.
+english.UpgradeTitle=Update %1
+english.UpgradeNotice=%1 will be updated from version %2 to %3.%n%nYour settings, your photo and video library and your backups are kept: the installer only replaces the program.
+english.SameVersionNotice=%1 %2 is already installed: it will be reinstalled. Your settings, library and backups are kept.
+german.UpgradeTitle=%1 aktualisieren
+german.UpgradeNotice=%1 wird von Version %2 auf %3 aktualisiert.%n%nEinstellungen, Foto- und Videobibliothek und Backups bleiben erhalten: Der Installer ersetzt nur das Programm.
+german.SameVersionNotice=%1 %2 ist bereits installiert und wird neu installiert. Einstellungen, Bibliothek und Backups bleiben erhalten.
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
@@ -96,6 +115,42 @@ Filename: "{app}\{#AppExe}"; Flags: nowait; Check: WizardSilent
 Type: filesandordirs; Name: "{app}"
 
 [Code]
+const
+  UninstallKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{6F2B4C1E-3A5D-4E8B-9C21-7D4A0E5F9B13}_is1';
+
+var
+  PreviousVersion: String;
+
+// Version ya instalada (para mostrar que es una actualizacion), buscando en
+// la instalacion "solo para mi" y en la "para todos los usuarios".
+function GetPreviousVersion(): String;
+begin
+  Result := '';
+  if not RegQueryStringValue(HKCU, UninstallKey, 'DisplayVersion', Result) then
+    if not RegQueryStringValue(HKLM64, UninstallKey, 'DisplayVersion', Result) then
+      RegQueryStringValue(HKLM32, UninstallKey, 'DisplayVersion', Result);
+end;
+
+procedure InitializeWizard();
+begin
+  PreviousVersion := GetPreviousVersion();
+  if PreviousVersion <> '' then
+    WizardForm.Caption := FmtMessage(CustomMessage('UpgradeTitle'), ['{#AppName}']);
+end;
+
+// En la pagina "Listo para instalar": aviso de que es una actualizacion y
+// de que la configuracion no se toca.
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  if (CurPageID = wpReady) and (PreviousVersion <> '') then
+  begin
+    if PreviousVersion = '{#AppVersion}' then
+      WizardForm.ReadyLabel.Caption := FmtMessage(CustomMessage('SameVersionNotice'), ['{#AppName}', PreviousVersion])
+    else
+      WizardForm.ReadyLabel.Caption := FmtMessage(CustomMessage('UpgradeNotice'), ['{#AppName}', PreviousVersion, '{#AppVersion}']);
+  end;
+end;
+
 // Al desinstalar: quitar el inicio automatico con Windows aunque se haya
 // activado desde Ajustes de la app (HKCU\...\Run\GoProSyncPro). La
 // configuracion y la cache de miniaturas del usuario se conservan.
