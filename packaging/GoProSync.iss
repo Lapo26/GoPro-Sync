@@ -87,6 +87,9 @@ Name: "autostart"; Description: "{cm:AutoStartProgram,{#AppName}}"; GroupDescrip
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Icono propio del acceso "Desinstalar": unins000.exe lleva el icono del
+; instalador (SetupIconFile = el de la app) y se confundiria con la app.
+Source: "..\app\assets\uninstall_icon.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [InstallDelete]
 ; Limpia los archivos de la version anterior (PyInstaller cambia nombres entre versiones).
@@ -98,7 +101,7 @@ Type: files; Name: "{autoprograms}\{#AppName}.lnk"
 ; Carpeta del menu Inicio: la app y su desinstalador (se omiten si se marca
 ; "No crear una carpeta en el menu Inicio").
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"; Comment: "Sincroniza y respalda tu GoPro"
-Name: "{group}\{cm:UninstallProgram,{#AppName}}"; Filename: "{uninstallexe}"
+Name: "{group}\{cm:UninstallProgram,{#AppName}}"; Filename: "{uninstallexe}"; IconFilename: "{app}\uninstall_icon.ico"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
 
 [Registry]
