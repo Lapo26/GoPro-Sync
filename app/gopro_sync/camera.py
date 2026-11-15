@@ -17,12 +17,15 @@ from .env import (
     GOPRO_MODEL_MATCH_PATTERN,
     GOPRO_MODEL_ORDER,
     IS_MAC,
+    IPCONFIG_EXE,
     IS_WINDOWS,
     LAST_DEVICE_NAME,
+    POWERSHELL_EXE,
     SYNC_IN_PROGRESS,
     _hidden_startupinfo,
 )
 from .i18n import _fmt_gb
+from .fileops import safe_device_name
 
 # Optional: bleak (Bluetooth LE) für das Auslesen des Akkustands per BLE,
 # UNABHÄNGIG vom USB-Verbindungsmodus der Kamera (siehe read_battery_via_ble
@@ -74,7 +77,7 @@ while ($true) {
 
     def _start(self):
         self._proc = subprocess.Popen(
-            ['powershell', '-NoProfile', '-NonInteractive', '-Command', self._SCRIPT],
+            [POWERSHELL_EXE, '-NoProfile', '-NonInteractive', '-Command', self._SCRIPT],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             text=True, encoding="utf-8", errors="replace", bufsize=1,
             startupinfo=_hidden_startupinfo()
@@ -359,14 +362,14 @@ def detect_connected_gopro_model():
         name = GPHOTO.autodetect()
         if not name:
             return None
-        LAST_DEVICE_NAME["name"] = name
+        LAST_DEVICE_NAME["name"] = safe_device_name(name)
         up = name.upper()
         return next((m for m in GOPRO_MODEL_ORDER if m in up), "HERO5")
     try:
         names = _DEVICE_PROBE.names()
         for line in names.splitlines():
             if any(model in line for model in GOPRO_MODEL_ORDER):
-                LAST_DEVICE_NAME["name"] = line.strip()
+                LAST_DEVICE_NAME["name"] = safe_device_name(line.strip())
                 break
         for model in GOPRO_MODEL_ORDER:
             if model in names:
@@ -389,7 +392,7 @@ def _model_from_version_txt(root):
     m = re.search(r'"camera type"\s*:\s*"([^"]+)"', text, re.IGNORECASE)
     if not m:
         return None
-    LAST_DEVICE_NAME["name"] = m.group(1).strip()
+    LAST_DEVICE_NAME["name"] = safe_device_name(m.group(1).strip())
     cam = m.group(1).upper()
     for model in GOPRO_MODEL_ORDER:
         if model in cam:
@@ -528,11 +531,16 @@ def attempt_api_battery_and_force_mtp():
         # Timeout erhöht auf 3.0 Sekunden
         req_state = urllib.request.Request(f"{base_url}/gopro/camera/state", method="GET")
         with urllib.request.urlopen(req_state, timeout=3.0) as response:
-            data = json.loads(response.read().decode('utf-8'))
-            bat = data.get('status', {}).get('70')
-            if bat is not None:
-                GLOBAL_CACHED_BATTERY = int(bat)
-                
+            data = json.loads(response.read(1024 * 1024).decode('utf-8'))
+        # Solo una GoPro contesta con "status" y "settings": si no, no se le
+        # manda nada mas (y menos un cambio de ajuste) a ese equipo.
+        if not (isinstance(data, dict) and isinstance(data.get('status'), dict)
+                and isinstance(data.get('settings'), dict)):
+            return
+        bat = data['status'].get('70')
+        if bat is not None:
+            GLOBAL_CACHED_BATTERY = max(0, min(100, int(bat)))
+
         req_mtp = urllib.request.Request(f"{base_url}/gopro/camera/setting?setting=112&option=1", method="GET")
         urllib.request.urlopen(req_mtp, timeout=2.0)
     except Exception:
@@ -665,11 +673,14 @@ def read_battery_via_ble(model=None):
 def _get_usb_subnet_candidates():
     candidates = []
     try:
-        result = subprocess.run(['ipconfig'], capture_output=True, text=True, encoding="utf-8", errors="replace",
+        result = subprocess.run([IPCONFIG_EXE], capture_output=True, text=True, encoding="utf-8", errors="replace",
                                  startupinfo=_hidden_startupinfo(), timeout=5)
         for m in re.finditer(r'IPv4[^:]*:\s*([\d.]+)', result.stdout or ""):
             ip = m.group(1)
-            if re.match(r'^172\.2\d\.', ip):
+            # Open GoPro por USB usa 172.2X.1YZ.51 (XYZ = ultimos digitos del
+            # numero de serie). Exigir el "1YZ" evita mandar peticiones a redes
+            # de Docker, WSL/Hyper-V o VPN que tambien caen en 172.20-29.x.x.
+            if re.match(r'^172\.2\d\.1\d\d\.\d+$', ip):
                 candidates.append(ip)
     except Exception:
         pass
@@ -685,7 +696,7 @@ def read_battery_via_open_gopro(timeout=1.2):
         base = f"http://{camera_ip}:8080"
         try:
             with urllib.request.urlopen(f"{base}/gopro/camera/state", timeout=timeout) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
+                data = json.loads(resp.read(1024 * 1024).decode("utf-8"))
             pct = data.get("status", {}).get("70")
             if pct is not None:
                 return max(0, min(100, int(pct)))
@@ -821,7 +832,7 @@ Write-Output ($result | ConvertTo-Json -Compress)
 '''
         ps_script = ps_script.replace("__GOPRO_PATTERN__", GOPRO_MODEL_MATCH_PATTERN)
         result = subprocess.run(
-            ['powershell', '-NoProfile', '-Command', ps_script],
+            [POWERSHELL_EXE, '-NoProfile', '-Command', ps_script],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             startupinfo=_hidden_startupinfo(), timeout=20
         )

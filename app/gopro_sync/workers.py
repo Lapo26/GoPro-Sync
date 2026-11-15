@@ -12,6 +12,7 @@ from .env import (
     GOPRO_MODELS,
     IS_WINDOWS,
     LAST_DEVICE_NAME,
+    POWERSHELL_EXE,
     SYNC_IN_PROGRESS,
     _hidden_startupinfo,
 )
@@ -40,6 +41,7 @@ from .fileops import (
     existing_candidates,
     files_identical,
     index_existing,
+    is_inside,
     quik_camera_folder,
     set_file_times,
 )
@@ -54,6 +56,7 @@ from .mtp import (
     build_list_script,
     build_single_copy_script,
     camera_item_key,
+    run_powershell_script,
 )
 
 class BackupWorkerThread(QThread):
@@ -347,8 +350,15 @@ class SyncWorkerThread(QThread):
         self._seq_dirs = plan_sequence_folders(items)
 
     def _seq_subdir(self, dest_dir, name):
+        """Ultimo paso al armar la carpeta de destino: agrega la subcarpeta de
+        la secuencia y comprueba que el resultado siga dentro de la biblioteca
+        (la carpeta de la camara sale de datos del dispositivo/tarjeta)."""
         sub = self._seq_dirs.get((name or "").lower())
-        return os.path.join(dest_dir, sub) if sub else dest_dir
+        out = os.path.join(dest_dir, sub) if sub else dest_dir
+        if not is_inside(out, self.target_dir):
+            print(f"[Sync] Carpeta de destino fuera de la biblioteca, se usa la raiz: {out}")
+            return self.target_dir
+        return out
 
     @staticmethod
     def _dt_epoch(dt):
@@ -369,6 +379,41 @@ class SyncWorkerThread(QThread):
                     return True
             except Exception:
                 pass
+        return False
+
+    @staticmethod
+    def _mtime_or_none(path):
+        try:
+            return os.path.getmtime(path)
+        except OSError:
+            return None
+
+    @staticmethod
+    def _safe_to_delete_existing(existing_index, name, size, when=None):
+        """Antes de BORRAR de la camara/tarjeta un archivo que "ya estaba" en el
+        destino, no alcanza con nombre + tamano: las GoPro reinician la
+        numeracion (GX010001.MP4) al formatear o con otra camara. Se exige
+        ademas que la fecha coincida (la sincronizacion pone a cada copia la
+        fecha de captura, y la importacion conserva la del archivo). Sin fecha
+        conocida no se borra: queda en la camara, que es lo seguro.
+        when: datetime de la camara o epoch (float) del archivo de origen."""
+        if f"{name.lower()}|{size}" in JOINED_PARTS:
+            return True
+        if when is None:
+            return False
+        try:
+            ts = when if isinstance(when, (int, float)) else when.timestamp()
+        except Exception:
+            return False
+        for existing_path in existing_candidates(existing_index, name):
+            try:
+                st = os.stat(existing_path)
+            except OSError:
+                continue
+            # FAT/exFAT guardan la hora con 2 s de resolucion
+            if st.st_size == size and abs(st.st_mtime - ts) <= 2.0:
+                return True
+        print(f"[Sync] {name}: hay un archivo con el mismo nombre y tamano pero otra fecha; no se borra del origen")
         return False
 
     def _result_message(self, copied, total, already, deleted, errors):
@@ -419,7 +464,8 @@ class SyncWorkerThread(QThread):
         for e in items:
             if e["size"] and self._already_there(existing_index, e["name"], e["size"]):
                 already += 1
-                if self.delete_after:
+                if self.delete_after and self._safe_to_delete_existing(
+                        existing_index, e["name"], e["size"], _parse_camera_dt(e.get("dt"))):
                     to_delete.append((e["path"], e["name"]))
             else:
                 pending.append(e)
@@ -635,7 +681,8 @@ class SyncWorkerThread(QThread):
         for it in items:
             if self._already_there(existing_index, it[1], it[2]):
                 already += 1
-                if self.delete_after:
+                if self.delete_after and self._safe_to_delete_existing(
+                        existing_index, it[1], it[2], self._mtime_or_none(it[0])):
                     to_delete.append(it[0])
             else:
                 pending.append(it)
@@ -738,7 +785,8 @@ class SyncWorkerThread(QThread):
                     last["pct"], last["t"] = pct, now
                     self.progress.emit(idx, total, name, pct)
         try:
-            ok = self._wpd.copy_to(name, dest_path, folder=folder, progress=progress, cancel=lambda: self._cancel)
+            ok = self._wpd.copy_to(name, dest_path, folder=folder, progress=progress, cancel=lambda: self._cancel,
+                                   size=size)
         except WpdError as e:
             print(f"[Sync] WPD: {name}: {e} -> copia del Explorador")
             return None
@@ -767,7 +815,7 @@ class SyncWorkerThread(QThread):
         anzeigt. Gibt (result_dict_oder_None, timed_out) zurueck."""
         try:
             proc = subprocess.Popen(
-                ['powershell', '-NoProfile', '-Command', copy_script],
+                [POWERSHELL_EXE, '-NoProfile', '-Command', copy_script],
                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                 text=True, encoding="utf-8", errors="replace",
                 startupinfo=_hidden_startupinfo()
@@ -918,7 +966,7 @@ class SyncWorkerThread(QThread):
         list_script = build_list_script(extensions)
         try:
             list_proc = subprocess.run(
-                ['powershell', '-NoProfile', '-Command', list_script],
+                [POWERSHELL_EXE, '-NoProfile', '-Command', list_script],
                 capture_output=True, text=True, encoding="utf-8", errors="replace",
                 startupinfo=_hidden_startupinfo(), timeout=40
             )
@@ -998,7 +1046,8 @@ class SyncWorkerThread(QThread):
             nm, sz = e.get("name") or "", e.get("size") or 0
             if sz and self._already_there(existing_index, nm, sz):
                 already += 1
-                if self.delete_after:
+                if self.delete_after and self._safe_to_delete_existing(
+                        existing_index, nm, sz, _parse_camera_dt(e.get("dt"))):
                     folder = tuple(x for x in (e.get("path") or "").split("|") if x)
                     to_delete_by_folder.setdefault(folder, []).append(nm)
             else:
@@ -1104,6 +1153,22 @@ class SyncWorkerThread(QThread):
             # die letzte PROGRESS-Zeile knapp unter der erwarteten Groesse
             # lag (z.B. minimal abweichende Dateisystem-Metadaten).
             self.progress.emit(idx, total, name, 100.0)
+            if isinstance(copy_result, dict) and copy_result.get("ok") and size:
+                # La copia del Explorador solo sabe que el archivo existe y dejo
+                # de crecer: con la preasignacion de MTP eso no garantiza que
+                # este completo. Sin el tamano exacto no cuenta como copiado
+                # (y por lo tanto tampoco se borra de la camara).
+                try:
+                    got = os.path.getsize(root_dest_path)
+                except OSError:
+                    got = -1
+                if got != size:
+                    print(f"[Sync] Copia incompleta de {name}: {got} de {size} bytes")
+                    try:
+                        os.remove(root_dest_path)
+                    except OSError:
+                        pass
+                    copy_result = {"error": tr(self.lang, "err_incomplete_copy", got=max(got, 0), size=size)}
             if isinstance(copy_result, dict) and copy_result.get("ok"):
                 copied += 1
                 final_path = root_dest_path
@@ -1181,8 +1246,8 @@ class SyncWorkerThread(QThread):
             # das haeufig, ohne dass man den ganzen Sync neu anstossen muss.
             for attempt in range(2):
                 try:
-                    delete_proc = subprocess.run(
-                        ['powershell', '-NoProfile', '-Command', delete_script],
+                    delete_proc = run_powershell_script(
+                        delete_script,
                         capture_output=True, text=True, encoding="utf-8", errors="replace",
                         # WICHTIG: HIER bewusst OHNE _hidden_startupinfo()!
                         # Das Loeschen ueber die Shell (InvokeVerbEx) zeigt

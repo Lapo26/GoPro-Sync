@@ -5,7 +5,7 @@ import subprocess
 import sys
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QDialog
-from .env import APP_DIR, IS_MAC, IS_WINDOWS, winreg
+from .env import APP_DIR, EXPLORER_EXE, IS_MAC, IS_WINDOWS, winreg
 
 # --- [ NATIVEN WINDOWS-KOPIERDIALOG FUER ECHTEN FORTSCHRITT AUSLESEN ] ---
 #
@@ -334,7 +334,7 @@ def move_to_recycle_bin(path):
 def show_in_explorer(path):
     try:
         if IS_WINDOWS:
-            subprocess.Popen(["explorer", "/select,", os.path.normpath(path)])
+            subprocess.Popen([EXPLORER_EXE, "/select,", os.path.normpath(path)])
         elif IS_MAC:
             subprocess.Popen(["open", "-R", path])
         else:

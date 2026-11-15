@@ -55,6 +55,27 @@ def _config_base():
 
 CONFIG_DIR = os.path.join(_config_base(), "GoProSyncPro")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "sync_config.json")
+
+
+def _cache_base():
+    # Carpeta de cache POR USUARIO. No usar tempfile.gettempdir() para rutas
+    # fijas: en Linux es /tmp, compartido con los demas usuarios del equipo.
+    if IS_WINDOWS:
+        return os.getenv("LOCALAPPDATA") or _config_base()
+    if IS_MAC:
+        return os.path.expanduser("~/Library/Caches")
+    return os.getenv("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
+
+
+# Windows: %LOCALAPPDATA%\GoProSyncPro (donde ya estaba la cache de teselas).
+CACHE_DIR = os.path.join(_cache_base(), "GoProSyncPro")
+
+# Programas del sistema con ruta completa: llamados solo por nombre, Windows
+# los busca antes en la carpeta del programa y en la carpeta actual.
+_SYSTEM_ROOT = os.environ.get("SystemRoot") or os.environ.get("windir") or r"C:\Windows"
+POWERSHELL_EXE = os.path.join(_SYSTEM_ROOT, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+IPCONFIG_EXE = os.path.join(_SYSTEM_ROOT, "System32", "ipconfig.exe")
+EXPLORER_EXE = os.path.join(_SYSTEM_ROOT, "explorer.exe")
 # UNA sola familia: con varias (o con emojis en los textos) Qt revisa las ~500
 # familias de Windows buscando reemplazos y el arranque tardaba 1,5-1,9 s mas.
 FONT_STACK = "'Century Gothic'"
@@ -207,6 +228,9 @@ DEFAULT_CONFIG = {
     "onboarding_done": False,
     "autostart_enabled": False,
     "open_on_gopro_connect": False,
+    # Descargar teselas de mapa (OSM, Esri, OpenTopoMap). Esos servicios ven la
+    # zona donde se grabo cada video; apagado solo se usan las ya guardadas.
+    "map_online": True,
 }
 
 

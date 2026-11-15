@@ -1,10 +1,9 @@
 """Galeria de los archivos de la camara."""
 import os
-import tempfile
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtGui import QColor, QImage
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
-from ..env import CAMERA_BROWSING
+from ..env import CACHE_DIR, CAMERA_BROWSING
 from ..i18n import _human_size, tr
 from ..sound import SoundManager
 from ..fileops import JOINED_PARTS, _parse_camera_dt, existing_candidates, index_existing
@@ -264,7 +263,8 @@ class CameraGalleryPage(QWidget):
         if self.worker is not None and self.worker.dead:
             show_toast(self, tr(self.lang, "cam_not_responding"))
             return
-        dest_dir = os.path.join(tempfile.gettempdir(), "GoProSync-preview")
+        # Cache por usuario (no una ruta fija en el /tmp compartido de Linux)
+        dest_dir = os.path.join(CACHE_DIR, "preview")
         os.makedirs(dest_dir, exist_ok=True)
         ext = ".mp4" if inf["video"] else os.path.splitext(name)[1]
         dest = os.path.join(dest_dir, os.path.splitext(name)[0] + ext)

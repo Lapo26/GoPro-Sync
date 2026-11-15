@@ -629,6 +629,15 @@ class SettingsDialog(QDialog):
         self.chk_check_updates.toggled.connect(self._on_check_updates_toggle)
         folder_layout.addSpacing(10)
         folder_layout.addWidget(self.chk_check_updates)
+        self.chk_map_online = ToggleSwitch(tr(self.lang, "map_online_setting"))
+        self.chk_map_online.set_accent(self.config.get("accent_color", "#00f2fe"))
+        self.chk_map_online.setChecked(self.config.get("map_online", True), animate=False)
+        self.chk_map_online.toggled.connect(self._on_map_online_toggle)
+        folder_layout.addWidget(self.chk_map_online)
+        map_hint = QLabel(tr(self.lang, "map_online_hint"))
+        map_hint.setStyleSheet("color: #777; font-size: 11px;")
+        map_hint.setWordWrap(True)
+        folder_layout.addWidget(map_hint)
         folder_layout.addStretch()
 
         # ============ Tab: Sounds ============
@@ -857,6 +866,10 @@ class SettingsDialog(QDialog):
 
     def _on_check_updates_toggle(self, state):
         self.config["check_updates"] = bool(state)
+        save_config(self.config)
+
+    def _on_map_online_toggle(self, state):
+        self.config["map_online"] = bool(state)
         save_config(self.config)
 
     def on_volume_changed(self, value):

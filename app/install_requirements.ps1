@@ -51,9 +51,14 @@ Write-Host "Aktualisiere pip..." -ForegroundColor Cyan
 python -m pip install --upgrade pip
 
 $reqFile = Join-Path $PSScriptRoot "requirements.txt"
+# Versiones fijas y verificadas por hash (si esta el repo completo)
+$lockFile = Join-Path (Split-Path -Parent $PSScriptRoot) "requirements.lock"
 
 Write-Host ""
-if (Test-Path $reqFile) {
+if (Test-Path $lockFile) {
+    Write-Host "Installiere Pakete aus requirements.lock (feste Versionen mit Hash)..." -ForegroundColor Cyan
+    python -m pip install --require-hashes -r $lockFile
+} elseif (Test-Path $reqFile) {
     Write-Host "Installiere benoetigte Pakete aus requirements.txt..." -ForegroundColor Cyan
     python -m pip install --upgrade -r $reqFile
 } else {

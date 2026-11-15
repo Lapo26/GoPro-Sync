@@ -64,6 +64,12 @@ WizardStyle=modern
 ; Cierra la app si esta abierta al actualizar.
 CloseApplications=yes
 RestartApplications=no
+#ifdef SIGN
+; Firma Authenticode del instalador y del desinstalador (build.ps1 define
+; /DSIGN y la herramienta "gpsign" cuando hay certificado).
+SignTool=gpsign
+SignedUninstaller=yes
+#endif
 
 [Languages]
 Name: "spanish"; MessagesFile: "compiler:Languages\Spanish.isl"

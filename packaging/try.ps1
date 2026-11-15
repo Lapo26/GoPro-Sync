@@ -29,7 +29,7 @@ if (-not $Python) {
         if ($LASTEXITCODE -ne 0) { throw "No se pudo crear .venv (hace falta Python 3.10+)" }
     }
     $Python = $venvPy
-    & $Python -m pip install --disable-pip-version-check -q -r app\requirements.txt -r requirements-dev.txt
+    & $Python -m pip install --disable-pip-version-check -q --require-hashes -r requirements.lock
     if ($LASTEXITCODE -ne 0) { throw "pip install fallo" }
 }
 

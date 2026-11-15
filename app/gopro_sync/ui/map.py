@@ -1,11 +1,10 @@
 """Mapa con el recorrido GPS (callejero, satelite, topografico...)."""
 import os
-import tempfile
 import time
 from PySide6.QtCore import QPoint, QPointF, QRectF, QUrl, Qt, Signal
 from PySide6.QtGui import QAction, QActionGroup, QColor, QDesktopServices, QImage, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QMenu, QPushButton, QToolButton, QVBoxLayout, QWidget
-from ..env import FONT_STACK
+from ..env import CACHE_DIR, FONT_STACK, load_config
 from ..i18n import tr
 from ..media import read_gopro_track, read_mp4_info
 from ..workers import ScanThread
@@ -60,7 +59,14 @@ class TileMapWidget(QWidget):
         self.pending = set()
         self._failed = {}               # tesela -> momento del ultimo fallo
         self.pool = ThreadPoolExecutor(max_workers=4)
-        self.cache_dir = os.path.join(os.environ.get("LOCALAPPDATA") or tempfile.gettempdir(), "GoProSyncPro", "tiles")
+        # Windows: %LOCALAPPDATA%\GoProSyncPro\tiles como siempre; macOS/Linux: cache del usuario.
+        self.cache_dir = os.path.join(CACHE_DIR, "tiles")
+        # Privacidad: con "Descargar mapas de internet" apagado en Ajustes no se
+        # pide nada a los servidores de teselas (verian donde se grabo el video).
+        try:
+            self.online = bool(load_config().get("map_online", True))
+        except Exception:
+            self.online = True
         self.layer = self._load_layer()
         # Vista: zoom entero de las teselas + escala 1..2 encima, para que el
         # recorrido llene el panel (con zoom entero quedaba a veces a la mitad).
@@ -262,7 +268,7 @@ class TileMapWidget(QWidget):
         if pm is not None:
             return pm
         key = f"{self.layer}/{z}/{x}/{y}"
-        if key not in self.pending and time.monotonic() - self._failed.get(key, -60) > 30:
+        if self.online and key not in self.pending and time.monotonic() - self._failed.get(key, -60) > 30:
             self.pending.add(key)
             info = MAP_LAYERS[self.layer]
             subs = info["subs"]
@@ -384,6 +390,15 @@ class TileMapWidget(QWidget):
         painter.drawRoundedRect(r, 4, 4)
         painter.setPen(QColor("#333333"))
         painter.drawText(r, Qt.AlignmentFlag.AlignCenter, text)
+        if not self.online:
+            note = tr(self.lang, "map_offline_notice")
+            nw = painter.fontMetrics().horizontalAdvance(note) + 12
+            nr = QRectF(4, self.height() - 20, min(nw, self.width() - tw - 12), 18)
+            painter.setBrush(QColor(0, 0, 0, 170))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawRoundedRect(nr, 4, 4)
+            painter.setPen(QColor("#ffffff"))
+            painter.drawText(nr, Qt.AlignmentFlag.AlignCenter, note)
 
     TELE_RECT = QRectF(10, 10, 214, 104)
 

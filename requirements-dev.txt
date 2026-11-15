@@ -1,2 +1,3 @@
 pyinstaller>=6.22
 pyinstaller-hooks-contrib>=2026.10
+pillow>=11  # lo usa PyInstaller en macOS/Linux para convertir el icono .png

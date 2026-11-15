@@ -16,17 +16,56 @@ from .videotools import ffmpeg_exe
 from .ui.graphics import GlowHoverAnimator, install_qt_translations, load_app_icon, set_boot_progress
 from .ui.main_window import AnimatedSplash, MainWindow, setup_tray
 
+def _instance_key():
+    """Clave aleatoria guardada en la carpeta de configuracion del usuario (que
+    los demas usuarios del equipo no pueden leer). Con ella el nombre del canal
+    de instancia unica no se puede adivinar: otro usuario no puede crearlo
+    antes y hacer que la app crea que ya esta abierta."""
+    import re
+    import secrets
+    path = os.path.join(CONFIG_DIR, "instance.key")
+    for _ in range(2):
+        try:
+            with open(path, "r", encoding="ascii") as f:
+                key = f.read().strip()
+            if re.fullmatch(r"[0-9a-f]{32}", key):
+                return key
+            os.remove(path)                      # contenido invalido: se regenera
+        except FileNotFoundError:
+            pass
+        except (OSError, UnicodeDecodeError):
+            return None
+        try:
+            os.makedirs(CONFIG_DIR, exist_ok=True)
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            key = secrets.token_hex(16)
+            with os.fdopen(fd, "w", encoding="ascii") as f:
+                f.write(key)
+            return key
+        except FileExistsError:
+            continue                             # otra copia la creo a la vez: leer la suya
+        except OSError:
+            return None
+    return None
+
+
 class _SingleInstance:
     """Canal local por usuario: la primera copia escucha; las siguientes le
     mandan "show" y salen."""
     def __init__(self):
         import getpass
+        import hashlib
         from PySide6.QtNetwork import QLocalServer, QLocalSocket
         try:
             user = getpass.getuser()
         except Exception:
             user = "user"
-        self.name = "GoProSyncPro-" + "".join(c for c in user if c.isalnum())
+        user = "".join(c for c in user if c.isalnum())
+        key = _instance_key()
+        if key:
+            self.name = "GoProSyncPro-" + hashlib.sha256(f"{user}:{key}".encode()).hexdigest()[:24]
+        else:
+            self.name = "GoProSyncPro-" + user  # sin carpeta de configuracion escribible
         self.window = None
         self.server = None
         probe = QLocalSocket()
@@ -37,6 +76,8 @@ class _SingleInstance:
             return
         QLocalServer.removeServer(self.name)          # restos de una copia que se corto
         self.server = QLocalServer()
+        # Solo el mismo usuario puede conectarse al canal.
+        self.server.setSocketOptions(QLocalServer.SocketOption.UserAccessOption)
         self.server.newConnection.connect(self._on_connection)
         self.server.listen(self.name)
 

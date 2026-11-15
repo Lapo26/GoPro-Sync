@@ -7,8 +7,9 @@ import tempfile
 from PySide6.QtCore import QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QProgressBar, QPushButton, QVBoxLayout
-from .version import APP_VERSION, GITHUB_REPO
-from .env import FONT_STACK, IS_MAC, IS_WINDOWS
+import sys
+from .version import APP_VERSION, GITHUB_REPO, UPDATE_SIGNER_SUBJECT
+from .env import FONT_STACK, IS_MAC, IS_WINDOWS, POWERSHELL_EXE, _hidden_startupinfo
 from .i18n import _human_size, tr
 from .ui.widgets import show_toast
 
@@ -63,6 +64,64 @@ def _asset_sha256(asset):
     return m.group(1).lower() if m else None
 
 
+_SIG_SCRIPT = (
+    "$s = Get-AuthenticodeSignature -LiteralPath $env:GPSYNC_SIG_PATH; "
+    "$c = $s.SignerCertificate; "
+    "[pscustomobject]@{ status = [string]$s.Status; "
+    "subject = $(if ($c) { $c.Subject } else { '' }); "
+    "thumb = $(if ($c) { $c.Thumbprint } else { '' }) } | ConvertTo-Json -Compress"
+)
+
+
+def authenticode_info(path):
+    """Firma Authenticode de un .exe: {"status": "Valid"/"NotSigned"/..., "subject",
+    "thumb"}, o None si no se pudo consultar. La ruta va por variable de
+    entorno, nunca dentro del texto del script."""
+    if not IS_WINDOWS:
+        return None
+    try:
+        proc = subprocess.run([POWERSHELL_EXE, "-NoProfile", "-NonInteractive", "-Command", _SIG_SCRIPT],
+                              capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
+                              env=dict(os.environ, GPSYNC_SIG_PATH=os.path.abspath(path)),
+                              startupinfo=_hidden_startupinfo())
+        data = json.loads((proc.stdout or "").strip() or "null")
+        if isinstance(data, dict) and isinstance(data.get("status"), str):
+            return {"status": data["status"], "subject": str(data.get("subject") or ""),
+                    "thumb": str(data.get("thumb") or "")}
+    except Exception as e:
+        print("[Actualizaciones] firma:", e)
+    return None
+
+
+def expected_signer():
+    """Subject que debe tener la firma del instalador, o "" si no se exige.
+    1) el fijado en version.py; 2) el de la app instalada, si esta firmada
+    (asi, una vez que se publica firmada, nadie puede colar una version sin
+    firma o firmada por otro)."""
+    if UPDATE_SIGNER_SUBJECT:
+        return UPDATE_SIGNER_SUBJECT
+    if IS_WINDOWS and getattr(sys, "frozen", False):
+        own = authenticode_info(sys.executable)
+        if own and own["status"] == "Valid" and own["subject"]:
+            return own["subject"]
+    return ""
+
+
+def check_installer_signature(path, expected):
+    """"" si el instalador se puede ejecutar; si no, el motivo."""
+    info = authenticode_info(path)
+    if info is None:
+        return "no se pudo comprobar la firma del instalador" if expected else ""
+    if info["status"] not in ("Valid", "NotSigned"):
+        return f"la firma del instalador no es valida ({info['status']})"
+    if expected:
+        if info["status"] != "Valid":
+            return "el instalador no esta firmado"
+        if info["subject"] != expected:
+            return f"el instalador esta firmado por otro ({info['subject']})"
+    return ""
+
+
 class UpdateDownloadThread(QThread):
     progress = Signal(int)
     done = Signal(str, str)       # ruta, error
@@ -100,7 +159,18 @@ class UpdateDownloadThread(QThread):
                 raise RuntimeError(f"tamaño incorrecto ({got} de {self.size} bytes)")
             if h.hexdigest() != self.sha256:
                 raise RuntimeError("el instalador descargado no coincide con el SHA-256 del Release")
+            # El SHA-256 viene de la misma API que el archivo: protege de una
+            # descarga corrupta, no de un Release publicado por otro. La firma
+            # Authenticode es lo que identifica a quien lo compilo.
+            # (se comprueba ya con el nombre .exe: con ".part" Windows no sabe leer la firma)
             os.replace(part, self.dest)
+            problem = check_installer_signature(self.dest, expected_signer())
+            if problem:
+                try:
+                    os.remove(self.dest)
+                except OSError:
+                    pass
+                raise RuntimeError(problem)
             self.done.emit(self.dest, "")
         except Exception as e:
             try:

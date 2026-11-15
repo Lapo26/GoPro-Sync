@@ -6,7 +6,7 @@ import threading
 import time
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtGui import QImage
-from .env import GOPRO_MODEL_MATCH_PATTERN, IS_WINDOWS, _hidden_startupinfo
+from .env import GOPRO_MODEL_MATCH_PATTERN, IS_WINDOWS, POWERSHELL_EXE, _hidden_startupinfo
 from .fileops import MEDIA_EXTENSIONS_BY_MODE, SYNC_MEDIA_EXTENSIONS, safe_camera_entries
 from .camera import GPHOTO, GPhotoSession, _wpd_modules
 
@@ -256,16 +256,30 @@ foreach ($grp in $groups) {{
     # -> genau DAS war vermutlich der Grund fuer "20 Dateien = 20 Prompts".
     # Jetzt wird nur noch als Erfolg gewertet, wenn WIRKLICH alle erwarteten
     # Dateien getroffen wurden.
-    try {{
-        $filterSpec = [string]::Join(";", $namesInGroup)
-        $allItems = $currentFolder.Items()
-        $subset = $allItems.Filter(64, $filterSpec)
-        if ($subset -ne $null -and $subset.Count -eq $wantedCount) {{
-            $subset.InvokeVerbEx("delete")
-            $totalDeleted += $wantedCount
-            $batchWorked = $true
-        }}
-    }} catch {{}}
+    # Filter() interpreta ";" como separador y "*", "?", "[" como comodines:
+    # con un nombre asi el patron podria abarcar OTROS archivos. En ese caso
+    # se salta este intento. Ademas, antes de borrar se comprueba que cada
+    # elemento elegido sea exactamente uno de los nombres pedidos.
+    $hasWildcards = $false
+    foreach ($n in $namesInGroup) {{ if ($n.IndexOfAny([char[]]';*?[]') -ge 0) {{ $hasWildcards = $true; break }} }}
+    if (-not $hasWildcards) {{
+        try {{
+            $filterSpec = [string]::Join(";", $namesInGroup)
+            $allItems = $currentFolder.Items()
+            $subset = $allItems.Filter(64, $filterSpec)
+            if ($subset -ne $null -and $subset.Count -eq $wantedCount) {{
+                $wantedSet = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+                foreach ($n in $namesInGroup) {{ [void]$wantedSet.Add($n) }}
+                $exact = $true
+                foreach ($it in $subset) {{ if (-not $wantedSet.Remove($it.Name)) {{ $exact = $false; break }} }}
+                if ($exact -and $wantedSet.Count -eq 0) {{
+                    $subset.InvokeVerbEx("delete")
+                    $totalDeleted += $wantedCount
+                    $batchWorked = $true
+                }}
+            }}
+        }} catch {{}}
+    }}
 
     # --- Versuch 2: echte Mehrfachauswahl ueber ein kurz geoeffnetes
     # Explorer-Fenster - genau wie beim manuellen Markieren mehrerer
@@ -344,6 +358,30 @@ Write-Output ("RESULT:" + ($result | ConvertTo-Json -Compress))
 '''
 
 
+# La linea de comandos de Windows admite ~32 767 caracteres: con cientos de
+# archivos para borrar, el script ya no entra en "-Command".
+_PS_COMMAND_LINE_MAX = 30000
+
+
+def run_powershell_script(script, **kwargs):
+    """subprocess.run de un script de PowerShell. Si es corto va por -Command
+    (como siempre); si es largo se escribe en un .ps1 temporal (UTF-8 con BOM,
+    para que PowerShell 5.1 lea bien los nombres con acentos o comillas
+    tipograficas) dentro de una carpeta privada y se corre con -File."""
+    if len(script) <= _PS_COMMAND_LINE_MAX:
+        return subprocess.run([POWERSHELL_EXE, '-NoProfile', '-Command', script], **kwargs)
+    import shutil
+    import tempfile
+    work = tempfile.mkdtemp(prefix="gpsync_ps_")
+    try:
+        path = os.path.join(work, "script.ps1")
+        with open(path, "w", encoding="utf-8-sig") as f:
+            f.write(script)
+        return subprocess.run([POWERSHELL_EXE, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path], **kwargs)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
 def _extract_result_json(stdout_text):
     """Nimmt die LETZTE Zeile, die mit RESULT: beginnt (falls PowerShell
     vorher noch andere Ausgaben/Warnungen schreibt) und parst sie als JSON."""
@@ -379,7 +417,7 @@ class CameraListThread(QThread):
             return
         try:
             script = build_list_script(MEDIA_EXTENSIONS_BY_MODE["all"])
-            proc = subprocess.run(['powershell', '-NoProfile', '-Command', script], capture_output=True, text=True,
+            proc = subprocess.run([POWERSHELL_EXE, '-NoProfile', '-Command', script], capture_output=True, text=True,
                                   encoding="utf-8", errors="replace", startupinfo=_hidden_startupinfo(), timeout=120)
             payload = _extract_result_json(proc.stdout)
             if isinstance(payload, dict) and "error" in payload:
@@ -572,9 +610,12 @@ class WpdCameraSession:
             data.append(bytes(buf[:got]))
         return b"".join(data)
 
-    def copy_to(self, name, dest, folder=None, progress=None, cancel=lambda: False, chunk=1024 * 1024):
+    def copy_to(self, name, dest, folder=None, progress=None, cancel=lambda: False, chunk=1024 * 1024, size=0):
         """Copia el archivo de la camara a 'dest' (via .part). progress(bytes).
-        Devuelve False si se cancelo. Lanza excepcion si fallo."""
+        Devuelve False si se cancelo. Lanza excepcion si fallo o si llegaron
+        menos bytes de los esperados ('size'): un stream que se corta antes de
+        tiempo (cable, camara dormida) no debe contar como copia correcta,
+        porque despues se puede borrar el original de la camara."""
         oid = self.object_id(name, folder)
         if oid is None:
             raise WpdError("no esta en la camara")
@@ -593,6 +634,8 @@ class WpdCameraSession:
                     done += got
                     if progress:
                         progress(done)
+                if size and done != size:
+                    raise IOError(f"copia incompleta ({done} de {size} bytes)")
                 f.flush()
                 os.fsync(f.fileno())      # a disco ANTES de renombrar (corte de luz / borrar de la camara)
             os.replace(part, dest)

@@ -30,14 +30,47 @@ MEDIA_EXTENSIONS_BY_MODE = {
 # --- [ NOMBRES QUE VIENEN DE LA CAMARA ] ---
 
 _UNSAFE_NAME_RE = re.compile(r'[\x00-\x1f/\\:*?"<>|]')
+# Nombres de dispositivo de Windows: "CON.MP4" no es un archivo sino la consola.
+_RESERVED_NAME_RE = re.compile(r"^(CON|PRN|AUX|NUL|COM[0-9¹²³]|LPT[0-9¹²³])(\..*)?$", re.IGNORECASE)
 
 
 def is_safe_camera_name(name):
     """True si es un nombre de archivo simple. Los nombres los informa la camara
     (o el dispositivo USB); uno como "..\\..\\x.MP4" escribiria fuera de la carpeta
-    de destino al unirlo con os.path.join."""
+    de destino al unirlo con os.path.join. Tambien se rechazan los nombres
+    reservados de Windows y los que terminan en punto o espacio (Windows los
+    recorta y chocarian con otro archivo)."""
     return (isinstance(name, str) and 0 < len(name) <= 255 and name.strip(". ") != ""
-            and not _UNSAFE_NAME_RE.search(name))
+            and not _UNSAFE_NAME_RE.search(name)
+            and not _RESERVED_NAME_RE.match(name)
+            and not name.endswith((".", " ")))
+
+
+_DEVICE_NAME_RE = re.compile(r"[^A-Za-z0-9 ._()+-]+")
+
+
+def safe_device_name(name):
+    """Nombre de la camara apto para usarlo como carpeta ("HERO5 Black").
+    Lo informa el dispositivo USB o el MISC\\version.txt de la tarjeta, asi que
+    se queda solo con caracteres simples: sin separadores, sin "..", sin
+    letra de unidad. Devuelve None si no queda nada usable."""
+    if not isinstance(name, str):
+        return None
+    name = _DEVICE_NAME_RE.sub("_", name).strip(" ._")[:64].strip(" ._")
+    if not name or _RESERVED_NAME_RE.match(name):
+        return None
+    return name
+
+
+def is_inside(path, root):
+    """True si 'path' queda dentro de la carpeta 'root' (o es ella misma),
+    resolviendo '..' y enlaces. Ultima defensa antes de escribir un archivo."""
+    try:
+        p = os.path.normcase(os.path.realpath(path))
+        r = os.path.normcase(os.path.realpath(root))
+        return os.path.commonpath([p, r]) == r
+    except (ValueError, OSError):
+        return False      # p. ej. unidades distintas en Windows
 
 
 def safe_camera_entries(entries):
@@ -77,6 +110,7 @@ def quik_camera_folder(target_dir, device_name, existing_paths=()):
     """GoPro Quik guardaba en FECHA\\<camara> <n>\\archivo, p. ej.
     2017-07-11\\HERO5 Black 1\\GOPR0007.JPG. Reutiliza el numero que ya
     exista en la biblioteca para esa camara; si no hay, usa 1."""
+    device_name = safe_device_name(device_name)
     if not device_name:
         return None
     pat = re.compile(r"^" + re.escape(device_name) + r" (\d+)$", re.IGNORECASE)

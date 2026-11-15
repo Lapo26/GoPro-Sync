@@ -29,9 +29,39 @@ Write-Host "== GoPro Sync $Version ==" -ForegroundColor Cyan
 
 if (-not $SkipDeps) {
     Write-Host "-> Instalando dependencias de build"
-    & $Python -m pip install --disable-pip-version-check -q --upgrade -r app\requirements.txt -r requirements-dev.txt
+    # Versiones fijas y verificadas por hash (ver requirements.lock)
+    & $Python -m pip install --disable-pip-version-check -q --require-hashes -r requirements.lock
     if ($LASTEXITCODE -ne 0) { throw "pip install fallo" }
 }
+
+# --- Firma de codigo (Authenticode), opcional ---
+# Si estan definidas WINDOWS_SIGN_PFX_B64 (certificado .pfx en base64) y
+# WINDOWS_SIGN_PASSWORD (en GitHub: Settings > Secrets > Actions), se firman
+# GoProSync.exe, el instalador y su desinstalador. El actualizador de la app
+# exige despues que las versiones nuevas vengan firmadas por el mismo
+# certificado (ver UPDATE_SIGNER_SUBJECT en app\gopro_sync\version.py).
+$SignTool = $null
+$SignPfx = $null
+if ($env:WINDOWS_SIGN_PFX_B64 -and $env:WINDOWS_SIGN_PASSWORD) {
+    $SignTool = (Get-Command signtool.exe -ErrorAction SilentlyContinue).Source
+    if (-not $SignTool) {
+        $SignTool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" -ErrorAction SilentlyContinue |
+            Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+    }
+    if (-not $SignTool) { throw "Hay certificado para firmar pero no se encontro signtool.exe (Windows SDK)" }
+    $SignPfx = Join-Path ([IO.Path]::GetTempPath()) ("gpsync-sign-" + [guid]::NewGuid().ToString("N") + ".pfx")
+    [IO.File]::WriteAllBytes($SignPfx, [Convert]::FromBase64String($env:WINDOWS_SIGN_PFX_B64))
+    Write-Host "-> Firma de codigo activada ($SignTool)"
+}
+$TimestampUrl = "http://timestamp.digicert.com"
+
+function Invoke-Sign([string]$File) {
+    if (-not $SignTool) { return }
+    & $SignTool sign /fd sha256 /tr $TimestampUrl /td sha256 /f $SignPfx /p $env:WINDOWS_SIGN_PASSWORD $File
+    if ($LASTEXITCODE -ne 0) { throw "No se pudo firmar $File" }
+}
+
+try {
 
 Write-Host "-> PyInstaller"
 Remove-Item -Recurse -Force build, dist -ErrorAction SilentlyContinue
@@ -75,6 +105,8 @@ Get-ChildItem (Join-Path $qt "translations") -Filter *.qm | Where-Object {
 } | ForEach-Object { $freed += $_.Length; Remove-Item -Force $_.FullName }
 Write-Host ("   {0:N1} MB menos" -f ($freed / 1MB))
 
+Invoke-Sign "dist\GoProSync\GoProSync.exe"
+
 Write-Host "-> ZIP portable"
 $zip = "dist\GoProSync-$Version-portable.zip"
 Compress-Archive -Path "dist\GoProSync\*" -DestinationPath $zip -Force
@@ -91,9 +123,19 @@ if (-not $SkipInstaller) {
         Write-Warning "Inno Setup (ISCC.exe) no esta instalado: se omite el instalador. Instalalo con: winget install JRSoftware.InnoSetup"
     } else {
         Write-Host "-> Inno Setup"
-        & $iscc /Qp "/DAppVersion=$Version" "/DSourceDir=$Root\dist\GoProSync" "/O$Root\dist" "packaging\GoProSync.iss"
+        $isccArgs = @("/Qp", "/DAppVersion=$Version", "/DSourceDir=$Root\dist\GoProSync", "/O$Root\dist")
+        if ($SignTool) {
+            # Inno firma el instalador y el desinstalador (unins000.exe) con esta
+            # herramienta: $f = archivo, $q = comilla.
+            $isccArgs += "/DSIGN"
+            $isccArgs += "/Sgpsign=`$q$SignTool`$q sign /fd sha256 /tr $TimestampUrl /td sha256 /f `$q$SignPfx`$q /p `$q$($env:WINDOWS_SIGN_PASSWORD)`$q `$f"
+        }
+        & $iscc @isccArgs "packaging\GoProSync.iss"
         if ($LASTEXITCODE -ne 0) { throw "Inno Setup fallo" }
     }
+}
+} finally {
+    if ($SignPfx -and (Test-Path $SignPfx)) { Remove-Item -Force $SignPfx }
 }
 
 Write-Host ""

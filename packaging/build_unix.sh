@@ -9,7 +9,8 @@ VERSION=$(sed -n 's/^APP_VERSION = "\(.*\)"/\1/p' app/gopro_sync/version.py)
 OS=$(uname -s)
 echo "== GoPro Sync $VERSION ($OS) =="
 
-"$PY" -m pip install --disable-pip-version-check -q --upgrade -r app/requirements.txt -r requirements-dev.txt pillow
+# Versiones fijas y verificadas por hash (ver requirements.lock)
+"$PY" -m pip install --disable-pip-version-check -q --require-hashes -r requirements.lock
 rm -rf build dist
 
 # libgphoto2 carga sus modulos (camlibs/iolibs) en tiempo de ejecucion y estos
@@ -62,9 +63,13 @@ HERE="$(dirname "$(readlink -f "$0")")"
 exec "$HERE/usr/bin/GoProSync" "$@"
 RUN
   chmod +x "$APPDIR/AppRun"
-  if [ ! -x build/appimagetool ]; then
+  # Version fija y verificada: "continuous" cambia con cada commit de appimagetool.
+  APPIMAGETOOL_VERSION=1.9.1
+  APPIMAGETOOL_SHA256=ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+  if [ ! -x build/appimagetool ] || ! echo "$APPIMAGETOOL_SHA256  build/appimagetool" | sha256sum -c --quiet -; then
     curl -fsSL -o build/appimagetool \
-      https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+      "https://github.com/AppImage/appimagetool/releases/download/$APPIMAGETOOL_VERSION/appimagetool-x86_64.AppImage"
+    echo "$APPIMAGETOOL_SHA256  build/appimagetool" | sha256sum -c -
     chmod +x build/appimagetool
   fi
   ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 build/appimagetool "$APPDIR" "dist/GoProSync-$VERSION-Linux-x86_64.AppImage"
