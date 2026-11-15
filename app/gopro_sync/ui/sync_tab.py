@@ -737,7 +737,8 @@ class SyncTabWidget(QWidget):
         self.sync_popup.show()
         self.sync_worker = SyncWorkerThread(
             target, False, "all", self.lang,
-            self.config.get("sort_into_date_folders", True), self, import_dir=folder, only_paths=only_paths
+            self.config.get("sort_into_date_folders", True), self, import_dir=folder, only_paths=only_paths,
+            sequence_folders=self.config.get("sequence_folders", False)
         )
         self.sync_worker.progress.connect(self.on_sync_progress)
         self.sync_worker.finished_sync.connect(self.on_sync_done)
@@ -772,7 +773,8 @@ class SyncTabWidget(QWidget):
         delete_after = self.chk_delete_after.isChecked()
         self.sync_worker = SyncWorkerThread(
             self.sync_target_dir, delete_after, mode, self.lang,
-            self.config.get("sort_into_date_folders", True), self, only_keys=only_keys
+            self.config.get("sort_into_date_folders", True), self, only_keys=only_keys,
+            sequence_folders=self.config.get("sequence_folders", False)
         )
         self.sync_worker.progress.connect(self.on_sync_progress)
         self.sync_worker.finished_sync.connect(self.on_sync_done)

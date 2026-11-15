@@ -7,13 +7,23 @@ import time
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtGui import QImage
 from .env import GOPRO_MODEL_MATCH_PATTERN, IS_WINDOWS, _hidden_startupinfo
-from .fileops import MEDIA_EXTENSIONS_BY_MODE, SYNC_MEDIA_EXTENSIONS
+from .fileops import MEDIA_EXTENSIONS_BY_MODE, SYNC_MEDIA_EXTENSIONS, safe_camera_entries
 from .camera import GPHOTO, GPhotoSession, _wpd_modules
+
+# PowerShell trata como comilla simple no solo ' sino tambien las tipograficas
+# (U+2018 a U+201B). Un nombre de archivo de la camara como "a’; cmd; ’b.MP4"
+# cerraria el literal y ejecutaria "cmd" si solo se duplicara '.
+_PS_SINGLE_QUOTES = ("'", "‘", "’", "‚", "‛")
+
 
 def _ps_str(s):
     """Erzeugt ein sicheres, single-quoted PowerShell-Stringliteral (keine
-    Variablen-Interpolation, nur ' muss verdoppelt werden)."""
-    return "'" + str(s).replace("'", "''") + "'"
+    Variablen-Interpolation; jede Art von einfachem Anfuehrungszeichen wird
+    verdoppelt)."""
+    s = str(s)
+    for q in _PS_SINGLE_QUOTES:
+        s = s.replace(q, q + q)
+    return "'" + s + "'"
 
 
 def _ps_str_array(items):
@@ -99,13 +109,12 @@ Write-Output ("RESULT:" + ($results | ConvertTo-Json -Compress -Depth 6))
 # --- PHASE 3: Genau eine Datei isoliert kopieren ----------------------------
 
 def build_single_copy_script(path_components, file_name, target_dir, dest_name):
-    target_dir_escaped = os.path.normpath(target_dir).replace('"', '""')
     path_array_literal = _ps_str_array(path_components)
 
     return f'''
 try {{ [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false) }} catch {{}}
 $ErrorActionPreference = "SilentlyContinue"
-$targetDir = "{target_dir_escaped}"
+$targetDir = {_ps_str(os.path.normpath(target_dir))}
 $destName = {_ps_str(dest_name)}
 $fileName = {_ps_str(file_name)}
 $pathParts = {path_array_literal}
@@ -362,7 +371,8 @@ class CameraListThread(QThread):
     def run(self):
         if not IS_WINDOWS:
             try:
-                self.listed.emit(GPHOTO.list_files(tuple(e.lower() for e in MEDIA_EXTENSIONS_BY_MODE["all"])))
+                self.listed.emit(safe_camera_entries(
+                    GPHOTO.list_files(tuple(e.lower() for e in MEDIA_EXTENSIONS_BY_MODE["all"]))))
             except Exception as e:
                 print("[gphoto2] listar:", e)
                 self.listed.emit(None)
@@ -376,7 +386,7 @@ class CameraListThread(QThread):
                 payload = None
             elif isinstance(payload, dict):
                 payload = [payload]
-            self.listed.emit(payload)
+            self.listed.emit(safe_camera_entries(payload))
         except Exception:
             self.listed.emit(None)
 

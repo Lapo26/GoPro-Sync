@@ -43,10 +43,37 @@ Remove-Item -Recurse -Force build, dist -ErrorAction SilentlyContinue
     --exclude-module tkinter `
     --exclude-module unittest `
     --exclude-module pydoc `
+    --exclude-module cv2 `
+    --exclude-module numpy `
     --distpath dist --workpath build `
     app\main.py
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller fallo" }
 if (-not (Test-Path "dist\GoProSync\GoProSync.exe")) { throw "No se genero dist\GoProSync\GoProSync.exe" }
+
+Write-Host "-> Quitando partes de Qt que la app no usa"
+# PyInstaller junta todos los plugins de Qt. El de teclado virtual arrastra
+# Qt Quick/Qml/OpenGL y el de PDF arrastra Qt Pdf; la app no usa ninguno.
+# opengl32sw.dll es OpenGL por software (la app dibuja con widgets / D3D).
+$qt = "dist\GoProSync\_internal\PySide6"
+$unused = @(
+    "opengl32sw.dll", "Qt6OpenGL.dll", "Qt6Pdf.dll", "Qt6VirtualKeyboard.dll",
+    "Qt6Quick.dll", "Qt6Qml.dll", "Qt6QmlMeta.dll", "Qt6QmlModels.dll", "Qt6QmlWorkerScript.dll",
+    "plugins\platforminputcontexts", "plugins\imageformats\qpdf.dll",
+    "plugins\platforms\qdirect2d.dll", "plugins\platforms\qminimal.dll"
+)
+$freed = 0
+foreach ($rel in $unused) {
+    $p = Join-Path $qt $rel
+    if (Test-Path $p) {
+        $freed += (Get-ChildItem $p -Recurse -File | Measure-Object Length -Sum).Sum
+        Remove-Item -Recurse -Force $p
+    }
+}
+# Traducciones de Qt: solo los idiomas de la app (es, en, de), sin las de Qt Help
+Get-ChildItem (Join-Path $qt "translations") -Filter *.qm | Where-Object {
+    $_.Name -like "qt_help_*" -or $_.BaseName -notmatch '_(es|en|de)$'
+} | ForEach-Object { $freed += $_.Length; Remove-Item -Force $_.FullName }
+Write-Host ("   {0:N1} MB menos" -f ($freed / 1MB))
 
 Write-Host "-> ZIP portable"
 $zip = "dist\GoProSync-$Version-portable.zip"

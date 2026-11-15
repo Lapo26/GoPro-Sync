@@ -418,7 +418,7 @@ class BackupDialog(QDialog):
 class ConfirmDeleteDialog(QDialog):
     """Confirmacion antes de eliminar (con el estilo de la app)."""
 
-    def __init__(self, parent, lang, path):
+    def __init__(self, parent, lang, path, question=None):
         super().__init__(parent)
         self.setWindowTitle(tr(lang, "delete_title"))
         self.setModal(True)
@@ -434,7 +434,7 @@ class ConfirmDeleteDialog(QDialog):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(26, 22, 26, 20)
         lay.setSpacing(10)
-        q = QLabel(tr(lang, "delete_question", name=os.path.basename(path)))
+        q = QLabel(question or tr(lang, "delete_question", name=os.path.basename(path)))
         q.setWordWrap(True)
         q.setStyleSheet("font-size: 17px; font-weight: 800;")
         d = QLabel(tr(lang, "delete_detail"))
@@ -715,3 +715,138 @@ class JoinDialog(QDialog):
             except Exception:
                 pass
         self.btn_ok.setEnabled(ok)
+
+
+class SequenceExportDialog(QDialog):
+    """Opciones para convertir un time-lapse o una rafaga en video (MP4) o GIF."""
+    MP4_WIDTHS = ((3840, "seq_res_4k"), (1920, "seq_res_1080"), (1280, "seq_res_720"))
+    GIF_WIDTHS = ((720, "seq_gif_720"), (480, "seq_gif_480"), (360, "seq_gif_360"))
+    FPS = (5, 10, 15, 24, 30, 60)
+
+    def __init__(self, parent, lang, seq, accent, last=None):
+        from PySide6.QtWidgets import QComboBox
+        super().__init__(parent)
+        self.lang, self.seq = lang, seq
+        burst = seq.get("kind") == "burst"
+        last = dict(last or {})
+        self.out_dir = seq.get("dir") or ""
+        self.setWindowTitle(tr(lang, "seq_export_title"))
+        self.setModal(True)
+        self.setMinimumWidth(520)
+        self.setStyleSheet(f"""
+            QDialog {{ background: #1c1e29; }}
+            QLabel {{ color: #fff; background: transparent; }}
+            * {{ font-family: {FONT_STACK}; }}
+            QPushButton {{ background: rgba(255,255,255,0.08); color: #fff; border: 1px solid rgba(255,255,255,0.14);
+                          border-radius: 10px; padding: 8px 16px; font-weight: 600; }}
+            QPushButton:hover {{ background: rgba(255,255,255,0.16); }}
+            QPushButton#primary {{ background: {accent}; color: #0d0d12; border: none; font-weight: 800; }}
+            QComboBox {{ background: rgba(255,255,255,0.08); color: #fff; border: 1px solid rgba(255,255,255,0.14);
+                        border-radius: 8px; padding: 6px 10px; min-width: 220px; }}
+            QComboBox QAbstractItemView {{ background: #23232b; color: #fff; selection-background-color: rgba(255,255,255,0.16); }}
+        """)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(26, 22, 26, 20)
+        lay.setSpacing(10)
+        title = QLabel(tr(lang, "seq_export_title"))
+        title.setStyleSheet("font-size: 19px; font-weight: 800;")
+        lay.addWidget(title)
+        intro = QLabel(tr(lang, "seq_export_intro_burst" if burst else "seq_export_intro", n=len(seq["frames"])))
+        intro.setWordWrap(True)
+        intro.setStyleSheet("font-size: 12px; color: rgba(255,255,255,0.65);")
+        lay.addWidget(intro)
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(14)
+        grid.setVerticalSpacing(10)
+        self.cmb_format = QComboBox()
+        self.cmb_format.addItem(tr(lang, "seq_fmt_mp4"), "mp4")
+        self.cmb_format.addItem(tr(lang, "seq_fmt_gif"), "gif")
+        self.cmb_res = QComboBox()
+        self.cmb_crop = QComboBox()
+        self.cmb_crop.addItem(tr(lang, "seq_crop_none"), False)
+        self.cmb_crop.addItem(tr(lang, "seq_crop_169"), True)
+        self.cmb_fps = QComboBox()
+        for f in self.FPS:
+            self.cmb_fps.addItem(tr(lang, "seq_fps", n=f), f)
+        rows = (("seq_opt_format", self.cmb_format), ("seq_opt_res", self.cmb_res),
+                ("seq_opt_crop", self.cmb_crop), ("seq_opt_fps", self.cmb_fps))
+        for r, (key, w) in enumerate(rows):
+            lbl = QLabel(tr(lang, key))
+            lbl.setStyleSheet("font-size: 13px; color: rgba(255,255,255,0.8);")
+            grid.addWidget(lbl, r, 0)
+            grid.addWidget(w, r, 1)
+        lay.addLayout(grid)
+        self.lbl_dur = QLabel("")
+        self.lbl_dur.setStyleSheet(f"font-size: 12px; color: {accent};")
+        lay.addWidget(self.lbl_dur)
+        self.chk_deflicker = ToggleSwitch(tr(lang, "seq_opt_deflicker"))
+        self.chk_deflicker.set_accent(accent)
+        lay.addWidget(self.chk_deflicker)
+        hint = QLabel(tr(lang, "seq_deflicker_hint"))
+        hint.setWordWrap(True)
+        hint.setStyleSheet("font-size: 11px; color: rgba(255,255,255,0.45);")
+        lay.addWidget(hint)
+        self._deflicker_hint = hint
+
+        dest_row = QHBoxLayout()
+        self.lbl_dest = QLabel("")
+        self.lbl_dest.setWordWrap(True)
+        self.lbl_dest.setStyleSheet("font-size: 11px; color: rgba(255,255,255,0.55);")
+        btn_dest = QPushButton(tr(lang, "seq_dest_change"))
+        btn_dest.clicked.connect(self._pick_dest)
+        dest_row.addWidget(self.lbl_dest, 1)
+        dest_row.addWidget(btn_dest)
+        lay.addSpacing(4)
+        lay.addLayout(dest_row)
+        lay.addSpacing(8)
+        row = QHBoxLayout()
+        row.addStretch()
+        cancel = QPushButton(tr(lang, "cancel_btn"))
+        cancel.clicked.connect(self.reject)
+        ok = QPushButton(tr(lang, "seq_export_go"))
+        ok.setObjectName("primary")
+        ok.setDefault(True)
+        ok.clicked.connect(self.accept)
+        row.addWidget(cancel)
+        row.addWidget(ok)
+        lay.addLayout(row)
+
+        # valores iniciales: lo ultimo que se uso para este tipo de secuencia
+        fmt = last.get("format") or ("gif" if burst and len(seq["frames"]) <= 60 else "mp4")
+        self.cmb_format.setCurrentIndex(1 if fmt == "gif" else 0)
+        self._fill_res(last.get("width"))
+        self.cmb_crop.setCurrentIndex(1 if last.get("crop169") else 0)
+        fps = last.get("fps") or (10 if burst else 30)
+        self.cmb_fps.setCurrentIndex(self.FPS.index(fps) if fps in self.FPS else 4)
+        self.chk_deflicker.setChecked(last.get("deflicker", not burst), animate=False)
+        self.cmb_format.currentIndexChanged.connect(lambda _i: (self._fill_res(None), self._update()))
+        self.cmb_fps.currentIndexChanged.connect(lambda _i: self._update())
+        self._update()
+
+    def _fill_res(self, want):
+        gif = self.cmb_format.currentData() == "gif"
+        self.cmb_res.clear()
+        for w, key in (self.GIF_WIDTHS if gif else self.MP4_WIDTHS):
+            self.cmb_res.addItem(tr(self.lang, key), w)
+        idx = self.cmb_res.findData(want) if want else -1
+        self.cmb_res.setCurrentIndex(idx if idx >= 0 else (1 if gif else 1))
+
+    def _update(self):
+        gif = self.cmb_format.currentData() == "gif"
+        self.chk_deflicker.setVisible(not gif)
+        self._deflicker_hint.setVisible(not gif)
+        secs = len(self.seq["frames"]) / float(self.cmb_fps.currentData() or 30)
+        self.lbl_dur.setText(tr(self.lang, "seq_result_dur", dur=f"{int(secs // 60)}:{secs % 60:04.1f}"))
+        self.lbl_dest.setText(tr(self.lang, "seq_dest", path=wrap_path(self.out_dir, 52)))
+
+    def _pick_dest(self):
+        d = QFileDialog.getExistingDirectory(self, tr(self.lang, "seq_dest_change"), _valid_start_dir(self.out_dir))
+        if d:
+            self.out_dir = os.path.normpath(d)
+            self._update()
+
+    def options(self):
+        return {"format": self.cmb_format.currentData(), "width": self.cmb_res.currentData(),
+                "crop169": bool(self.cmb_crop.currentData()), "fps": self.cmb_fps.currentData(),
+                "deflicker": self.chk_deflicker.isChecked()}

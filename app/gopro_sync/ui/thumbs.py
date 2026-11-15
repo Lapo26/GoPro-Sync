@@ -3,37 +3,24 @@ import hashlib
 import os
 import shutil
 import struct
+import subprocess
 import threading
 from datetime import datetime
 from datetime import timedelta
 from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, QRectF, QSize, QThread, QTimer, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QImage, QImageReader, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import QAbstractScrollArea, QFrame, QToolTip
-from ..env import CONFIG_DIR
+from ..env import CONFIG_DIR, _hidden_startupinfo
 from ..i18n import tr
 from ..media import is_broken_mp4
 from ..fileops import MEDIA_EXTENSIONS_BY_MODE
+from ..videotools import ffmpeg_exe
 from ..ui.graphics import THUMB_H, THUMB_W, draw_play_badge, make_cover_thumbnail, screen_dpr
 
-# Optional: OpenCV for Video Thumbnails
-# Silencia los mensajes de FFmpeg en la consola ("moov atom not found"...)
-os.environ.setdefault("OPENCV_FFMPEG_LOGLEVEL", "-8")
-# OpenCV se carga recien al generar la primera miniatura de video (tarda
-# ~1 s en importarse y no hace falta para arrancar).
-cv2 = None
-_HAS_CV2 = True
-
-
-def _load_cv2():
-    """Carga OpenCV la primera vez y lo devuelve (o None si no esta)."""
-    global cv2, _HAS_CV2
-    if cv2 is None and _HAS_CV2:
-        try:
-            import cv2 as _cv2
-            cv2 = _cv2
-        except Exception:
-            _HAS_CV2 = False
-    return cv2
+# Miniaturas de video: el primer cuadro con el ffmpeg incluido (el mismo que
+# usan unir/reparar). Antes se usaba OpenCV solo para esto: +140 MB en el
+# paquete y ~1 s para importarlo.
+_FFMPEG_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 DEFAULT_THUMB_CACHE_DIR = os.path.join(CONFIG_DIR, "thumb_cache")
@@ -134,7 +121,7 @@ class ThumbnailLoaderThread(QThread):
     """Erzeugt die Vorschaubilder fuer eine Galerie (Videos ODER Bilder) in
     einem Hintergrund-Thread, statt die Oberflaeche waehrend dessen
     einzufrieren - bei vielen Dateien (v.a. Videos, wo jeweils der erste
-    Frame per OpenCV dekodiert werden muss) machte das bisher spuerbar
+    Frame per ffmpeg dekodiert werden muss) machte das bisher spuerbar
     lange nichts mehr reagierte ("15 Sekunden nach dem Einrichtungsassistenten").
     Nutzt durchgehend QImage (nicht QPixmap) - das ist die einzige Qt-
     Bildklasse, die auch ausserhalb des GUI-Threads sicher ist."""
@@ -291,20 +278,26 @@ class ThumbnailLoaderThread(QThread):
         self.finished_loading.emit()
 
     def _read_video_frame(self, path):
-        cv = _load_cv2()
-        if cv is None:
+        """Primer cuadro del video, ya achicado (ffmpeg -> BMP por un pipe)."""
+        exe = ffmpeg_exe()
+        if not exe:
             return None
+        # Achicado en ffmpeg a 2x la cache (despues se recorta con calidad);
+        # -skip_frame nokey: decodifica solo cuadros clave, el primero lo es.
+        scale = f"scale={self.CACHE_W * 2}:-2"
+        cmd = [exe, "-hide_banner", "-nostdin", "-v", "error", "-skip_frame", "nokey",
+               "-i", path, "-map", "0:v:0", "-frames:v", "1", "-vf", scale,
+               "-f", "image2pipe", "-c:v", "bmp", "-"]
         try:
-            cap = cv.VideoCapture(path)
-            ret, frame = cap.read()
-            cap.release()
-            if not ret:
-                return None
-            h, w, ch = frame.shape
-            bytes_per_line = ch * w
-            return QImage(frame.data, w, h, bytes_per_line, QImage.Format.Format_BGR888).copy()
+            out = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                 stdin=subprocess.DEVNULL, timeout=30,
+                                 startupinfo=_hidden_startupinfo(), creationflags=_FFMPEG_NO_WINDOW)
         except Exception:
             return None
+        if not out.stdout:
+            return None
+        img = QImage.fromData(out.stdout, "BMP")
+        return None if img.isNull() else img
 
 
 # --- [ DATUMS-TRENNER FUER DIE GALERIE ] ---
@@ -467,6 +460,16 @@ class ThumbGridView(QAbstractScrollArea):
         self._press_pos = None
         self.selected = set()
         self.tooltips = {}
+        # Videos partidos de la GoPro: ruta -> (parte, total, estado) con estado
+        # "ok" (se puede unir), "done" (ya unido) o "bad" (falta/danada una parte)
+        self.chapters = {}
+        # Secuencias de fotos (time-lapse / rafaga): portada -> (tipo, fotos,
+        # expandida, color) y, si esta expandida, cada foto -> (n, total, color)
+        self.sequences = {}
+        self.seq_frames = {}
+        # Videos con recorrido GPS: mapita arriba a la derecha de la miniatura
+        self.gps = set()
+        self._gps_icon = None
         self.accent = QColor("#00f2fe")
         self.header_font = QFont("Century Gothic")
         self.header_font.setPixelSize(13)
@@ -656,6 +659,9 @@ class ThumbGridView(QAbstractScrollArea):
                 pix = self.lru.get(path)
                 clip = QPainterPath()
                 clip.addRoundedRect(r, 12, 12)
+                sq = self.sequences.get(path)
+                if sq and not sq[2]:
+                    self._paint_stack_back(painter, r, sq[3])     # "pila" de fotos detras de la portada
                 if pix is None:
                     painter.fillPath(clip, QColor(255, 255, 255, 12))
                     if path not in self.missing:
@@ -678,9 +684,117 @@ class ThumbGridView(QAbstractScrollArea):
                 st = self.status.get(path)
                 if st:
                     self._paint_badge(painter, r, st)
+                if path in self.gps:
+                    painter.save()
+                    self._paint_gps(painter, r)
+                    painter.restore()
+                ch = self.chapters.get(path)
+                if ch:
+                    painter.save()      # que el relleno de la marca no quede para las siguientes miniaturas
+                    self._paint_chapter(painter, r, clip, sel, *ch)
+                    painter.restore()
+                if sq:
+                    painter.save()
+                    self._paint_sequence(painter, r, clip, sel, *sq)
+                    painter.restore()
+                fr = self.seq_frames.get(path)
+                if fr:
+                    painter.save()
+                    self._paint_seq_frame(painter, r, clip, sel, *fr)
+                    painter.restore()
                 if self.selectable:
                     self._paint_check(painter, r, sel, hovered)
         painter.end()
+
+    def _paint_stack_back(self, painter, r, color):
+        """Dos fotos asomando detras de la portada: se ve que es un grupo."""
+        painter.save()
+        for k, alpha in ((2, 70), (1, 130)):
+            rr = r.translated(5 * k, -5 * k).adjusted(6 * k, 0, -6 * k, 0)
+            path = QPainterPath()
+            path.addRoundedRect(rr, 12, 12)
+            painter.fillPath(path, QColor(40, 42, 54))
+            c = QColor(color)
+            c.setAlpha(alpha)
+            painter.setPen(QPen(c, 1.5))
+            painter.drawPath(path)
+        painter.restore()
+
+    def _pill(self, painter, rect_left, bottom, text, color, right=None):
+        f = QFont(self.header_font)
+        f.setPixelSize(11)
+        painter.setFont(f)
+        w = painter.fontMetrics().horizontalAdvance(text) + 18
+        x = rect_left if right is None else right - w
+        pill = QRectF(x, bottom - 20, w, 20)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(color))
+        painter.drawRoundedRect(pill, 10, 10)
+        painter.setPen(QColor("#0d0d12"))
+        painter.drawText(pill, Qt.AlignmentFlag.AlignCenter, text)
+        return pill
+
+    def _paint_sequence(self, painter, r, clip, selected, kind, count, expanded, color):
+        """Portada de una secuencia: etiqueta TIME-LAPSE · 240 / RAFAGA · 30 y,
+        en un time-lapse, el boton de reproducir en el centro."""
+        if expanded:
+            return                                   # cada foto lleva su propia marca
+        key = "seq_badge_burst" if kind == "burst" else "seq_badge_timelapse"
+        self._pill(painter, r.left() + 8, r.bottom() - 8, tr(self.lang, key, n=count), color)
+        if kind != "burst":
+            c = r.center()
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(0, 0, 0, 120))
+            painter.drawEllipse(c, 22, 22)
+            tri = QPainterPath(QPointF(c.x() - 7, c.y() - 11))
+            tri.lineTo(c.x() + 12, c.y())
+            tri.lineTo(c.x() - 7, c.y() + 11)
+            tri.closeSubpath()
+            painter.fillPath(tri, QColor(255, 255, 255, 235))
+
+    def _paint_seq_frame(self, painter, r, clip, selected, i, n, color):
+        """Foto de una secuencia expandida: borde del color del grupo y n/N."""
+        if not selected:
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(QColor(color), 3))
+            painter.drawPath(clip)
+        self._pill(painter, r.left() + 8, r.bottom() - 8, f"{i}/{n}", color)
+
+    def _paint_gps(self, painter, r):
+        """Mapita: el video tiene recorrido GPS (se ve en el reproductor)."""
+        if self._gps_icon is None:
+            from ..ui.graphics import emoji_icon
+            self._gps_icon = emoji_icon("🗺", 16).pixmap(16, 16)
+        c = QPointF(r.right() - 20, r.top() + 20)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(15, 17, 24, 190))
+        painter.drawEllipse(c, 14, 14)
+        painter.drawPixmap(int(c.x() - 8), int(c.y() - 8), self._gps_icon)
+
+    def _paint_chapter(self, painter, r, clip, selected, part, total, state, color="#00f2fe"):
+        """Partes de un video partido: borde y etiqueta del color de su grupo
+        (cada video partido tiene el suyo) con PARTE n/N abajo a la izquierda."""
+        group = QColor(color)
+        if not selected:                     # en modo seleccion manda el borde de elegido
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(group, 3))
+            painter.drawPath(clip)
+        text = tr(self.lang, "chapter_badge", i=part, n=total)
+        if state == "done":
+            text += "  ✓"
+        elif state == "bad":
+            text += "  !"
+        f = QFont(self.header_font)
+        f.setPixelSize(11)
+        painter.setFont(f)
+        w = painter.fontMetrics().horizontalAdvance(text) + 18
+        pill = QRectF(r.left() + 8, r.bottom() - 28, w, 20)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(group)
+        fg = QColor("#0d0d12")
+        painter.drawRoundedRect(pill, 10, 10)
+        painter.setPen(fg)
+        painter.drawText(pill, Qt.AlignmentFlag.AlignCenter, text)
 
     def _paint_badge(self, painter, r, status):
         """Marca de estado: check verde = ya sincronizado; NUEVO = falta copiar."""

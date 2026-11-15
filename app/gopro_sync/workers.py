@@ -27,6 +27,7 @@ from .winshell import (
 )
 from .media import _read_jpeg_exif_datetime, get_media_capture_date, replaceable_broken_copy
 from .fileops import (
+    safe_camera_entries,
     JOINED_PARTS,
     MEDIA_EXTENSIONS_BY_MODE,
     ReadStalled,
@@ -43,6 +44,7 @@ from .fileops import (
     set_file_times,
 )
 from .camera import GPHOTO, _GOPRO_DCIM_SUBDIR_RE, _find_gopro_card_root, _model_from_version_txt
+from .sequences import parse_seq_name, plan_sequence_folders
 from .mtp import (
     WpdCameraSession,
     WpdError,
@@ -215,8 +217,12 @@ class SyncWorkerThread(QThread):
     plan = Signal(object)        # lista con el tamano de cada archivo (para el progreso total)
 
     def __init__(self, target_dir, delete_after, sync_mode="all", lang="de", sort_into_date_folders=True, parent=None,
-                 import_dir=None, only_keys=None, only_paths=None):
+                 import_dir=None, only_keys=None, only_paths=None, sequence_folders=False):
         super().__init__(parent)
+        # Cada time-lapse / rafaga en su propia subcarpeta dentro del dia
+        # ("Time Lapse G012", "Burst G013"), como hacia Quik.
+        self.sequence_folders = bool(sequence_folders)
+        self._seq_dirs = {}
         # Sincronizar solo estos archivos de la camara ("carpeta|nombre"), elegidos
         # en "Elegir archivos..."; None = todos.
         self.only_keys = set(only_keys) if only_keys else None
@@ -325,6 +331,32 @@ class SyncWorkerThread(QThread):
             self._err(name, self._reason_from_exception(errs[-1]))
         return ok
 
+    def _plan_sequences(self, entries):
+        """entries: [(nombre, fecha_epoch o funcion que la devuelve)]. Solo
+        se consulta la fecha de las fotos de secuencias."""
+        if not (self.sequence_folders and self.sort_into_date_folders):
+            self._seq_dirs = {}
+            return
+        items = []
+        for name, ts in entries:
+            if parse_seq_name(name or ""):
+                try:
+                    items.append((name, ts() if callable(ts) else ts))
+                except Exception:
+                    items.append((name, None))
+        self._seq_dirs = plan_sequence_folders(items)
+
+    def _seq_subdir(self, dest_dir, name):
+        sub = self._seq_dirs.get((name or "").lower())
+        return os.path.join(dest_dir, sub) if sub else dest_dir
+
+    @staticmethod
+    def _dt_epoch(dt):
+        try:
+            return dt.timestamp() if dt else None
+        except Exception:
+            return None
+
     @staticmethod
     def _already_there(existing_index, name, size):
         """Ya hay una copia con el mismo nombre y tamano en el destino (o es
@@ -361,7 +393,7 @@ class SyncWorkerThread(QThread):
             return
         exts = tuple(e.lower() for e in MEDIA_EXTENSIONS_BY_MODE[self.sync_mode])
         try:
-            items = GPHOTO.list_files(exts)
+            items = safe_camera_entries(GPHOTO.list_files(exts))
         except Exception as e:
             print("[gphoto2] listar:", e)
             busy = "busy" in str(e).lower() or "claim" in str(e).lower()
@@ -382,6 +414,7 @@ class SyncWorkerThread(QThread):
                 index_existing(existing_index, f, os.path.join(root, f))
         cam_folder = quik_camera_folder(self.target_dir, self.device_name,
                                         [p for paths in existing_index.values() for p in paths])
+        self._plan_sequences([(e["name"], self._dt_epoch(_parse_camera_dt(e.get("dt")))) for e in items])
         already, pending, to_delete = 0, [], []
         for e in items:
             if e["size"] and self._already_there(existing_index, e["name"], e["size"]):
@@ -408,6 +441,7 @@ class SyncWorkerThread(QThread):
                 dest_dir = os.path.join(self.target_dir, dt.strftime("%Y-%m-%d"))
                 if cam_folder:
                     dest_dir = os.path.join(dest_dir, cam_folder)
+                dest_dir = self._seq_subdir(dest_dir, name)
             os.makedirs(dest_dir, exist_ok=True)
             dest = os.path.join(dest_dir, name)
             if os.path.exists(dest) and not replaceable_broken_copy(dest, size):
@@ -483,6 +517,7 @@ class SyncWorkerThread(QThread):
             dest_dir = os.path.join(self.target_dir, dt.strftime("%Y-%m-%d"))
             if cam_folder:
                 dest_dir = os.path.join(dest_dir, cam_folder)
+            dest_dir = self._seq_subdir(dest_dir, name)
         try:
             os.makedirs(dest_dir, exist_ok=True)
         except Exception:
@@ -593,6 +628,7 @@ class SyncWorkerThread(QThread):
 
         # Contar solo lo que hay que copiar: lo que ya esta no entra en el
         # progreso ("1 de 15", no "1 de 177").
+        self._plan_sequences([(it[1], (lambda src=it[0]: os.path.getmtime(src))) for it in items])
         already = 0
         to_delete = []
         pending = []
@@ -913,6 +949,7 @@ class SyncWorkerThread(QThread):
             items = [payload]
         else:
             items = payload or []
+        items = safe_camera_entries(items)
         if self.only_keys is not None:
             items = [e for e in items if camera_item_key(e) in self.only_keys]
 
@@ -952,6 +989,7 @@ class SyncWorkerThread(QThread):
         cam_folder = quik_camera_folder(self.target_dir, self.device_name,
                                         [p for paths in existing_index.values() for p in paths])
 
+        self._plan_sequences([(e.get("name") or "", self._dt_epoch(_parse_camera_dt(e.get("dt")))) for e in items])
         # Contar solo lo que hay que copiar ("1 de 15", no "1 de 177"); lo que
         # ya esta se borra de la camara igual si esta activado "borrar despues".
         already = 0
@@ -1080,6 +1118,7 @@ class SyncWorkerThread(QThread):
                         dated_dir = os.path.join(self.target_dir, date_folder)
                         if cam_folder:
                             dated_dir = os.path.join(dated_dir, cam_folder)
+                        dated_dir = self._seq_subdir(dated_dir, name)
                         os.makedirs(dated_dir, exist_ok=True)
                         target_path = os.path.join(dated_dir, dest_name)
                         if os.path.exists(target_path) and replaceable_broken_copy(target_path, size):

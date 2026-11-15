@@ -27,6 +27,29 @@ MEDIA_EXTENSIONS_BY_MODE = {
 }
 
 
+# --- [ NOMBRES QUE VIENEN DE LA CAMARA ] ---
+
+_UNSAFE_NAME_RE = re.compile(r'[\x00-\x1f/\\:*?"<>|]')
+
+
+def is_safe_camera_name(name):
+    """True si es un nombre de archivo simple. Los nombres los informa la camara
+    (o el dispositivo USB); uno como "..\\..\\x.MP4" escribiria fuera de la carpeta
+    de destino al unirlo con os.path.join."""
+    return (isinstance(name, str) and 0 < len(name) <= 255 and name.strip(". ") != ""
+            and not _UNSAFE_NAME_RE.search(name))
+
+
+def safe_camera_entries(entries):
+    """Descarta de un listado de la camara las entradas con nombres no validos."""
+    if not entries:
+        return entries
+    ok = [e for e in entries if isinstance(e, dict) and is_safe_camera_name(e.get("name"))]
+    if len(ok) != len(entries):
+        print(f"[Camara] {len(entries) - len(ok)} archivo(s) con nombre no valido ignorado(s)")
+    return ok
+
+
 # --- [ DETECCION DE DUPLICADOS ] ---
 
 _DUP_SUFFIX_RE = re.compile(r"^(.*)_(\d+)(\.[^.]+)$")

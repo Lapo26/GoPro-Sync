@@ -17,7 +17,8 @@ from ..env import (
 from ..i18n import tr
 from ..winshell import TaskbarProgress, apply_dark_titlebar, bring_to_front, set_autostart, show_in_explorer
 from ..fileops import JOINED_PARTS
-from ..videotools import find_chapter_groups, join_job, light_version_job, repair_job, selection_join_group
+from ..videotools import (clip_job, find_chapter_groups, join_job, light_version_job, repair_job, selection_join_group,
+                          sequence_video_job, share_dir)
 from ..ui.graphics import (
     install_qt_translations,
     add_text_shadow,
@@ -34,7 +35,7 @@ from ..ui.graphics import (
 from ..ui.widgets import ActivityNavButton, AvatarPreview, show_toast
 from ..updates import UpdateCheckThread, UpdateDialog
 from ..ui.thumbs import set_thumb_cache_dir
-from ..ui.dialogs import BackupDialog, ConfirmQuitDialog, ImportConfirmDialog, JoinDialog, LanguageDialog
+from ..ui.dialogs import BackupDialog, ConfirmQuitDialog, ImportConfirmDialog, JoinDialog, LanguageDialog, SequenceExportDialog
 from ..ui.gallery import PictureGallery, VideoGallery
 from ..ui.camera_page import CameraGalleryPage
 from ..ui.sync_tab import SyncTabWidget
@@ -300,7 +301,11 @@ class MainWindow(QWidget):
             self.sidebar.hide()
             self.pages.setCurrentIndex(self.ONBOARDING_INDEX)
         else:
-            self.pages.setCurrentIndex(0)
+            # Sin camara conectada se abre directo en Videos; si al rato
+            # aparece la GoPro (la deteccion tarda 1-3 s) y el usuario todavia
+            # no fue a otra seccion, se pasa sola a Sincronizar.
+            self._auto_start_page = True
+            self.switch_page(1, self.btn_nav_videos, auto=True)
 
         boot_step(95, "boot_done")
         self.update_sidebar_theme()
@@ -476,13 +481,77 @@ class MainWindow(QWidget):
         self.sync_page.start_import(dlg.source, dlg.target, only_paths=dlg.only_paths)
 
     def make_light_version(self, path):
+        return self.make_light_versions([path])
+
+    def make_light_versions(self, paths):
+        """Versiones livianas de uno o varios videos, en la carpeta que se
+        elija (recuerda la ultima). True si se puso en marcha."""
+        paths = [p for p in paths if p]
+        if not paths:
+            return False
+        start = self.config.get("light_last_dir") or share_dir()
+        if not os.path.isdir(start):
+            start = share_dir()
+        folder = QFileDialog.getExistingDirectory(self, tr(self.lang, "light_pick_folder"), start)
+        if not folder:
+            return False
+        self.config["light_last_dir"] = folder
+        save_config(self.config)
+
+        def done(ok, stats):
+            outs = stats.get("outputs") or []
+            if outs:
+                show_in_explorer(outs[0])
+        self.show_activity()
+        title = (tr(self.lang, "light_title", name=os.path.basename(paths[0])) if len(paths) == 1
+                 else tr(self.lang, "light_title_n", n=len(paths)))
+        self.sync_page.start_tool(title, [light_version_job(p, self.lang, folder) for p in paths], done)
+        return True
+
+    def make_clip(self, path, start_s, end_s, mode, parent=None):
+        """Fragmento de un video para mandar (desde el reproductor). Se guarda
+        en la carpeta que se elija (recuerda la ultima). True si se puso en marcha."""
+        start = self.config.get("clip_last_dir") or self.config.get("light_last_dir") or share_dir()
+        if not os.path.isdir(start):
+            start = share_dir()
+        folder = QFileDialog.getExistingDirectory(parent or self, tr(self.lang, "clip_pick_folder"), start)
+        if not folder:
+            return False
+        self.config["clip_last_dir"] = folder
+        save_config(self.config)
+
         def done(ok, stats):
             outs = stats.get("outputs") or []
             if ok and outs:
                 show_in_explorer(outs[0])
+                if os.path.normcase(os.path.abspath(outs[0])).startswith(
+                        os.path.normcase(os.path.abspath(self.sync_page.sync_target_dir))):
+                    self.videos_page.refresh()
+        self.sync_page.start_tool(tr(self.lang, "clip_title", name=os.path.basename(path)),
+                                  [clip_job(path, start_s, end_s, mode, self.lang, folder)], done)
+        return True
+
+    def export_sequence(self, seq):
+        """Time-lapse / rafaga a video o GIF (opciones en un dialogo)."""
+        last = (self.config.get("seq_export") or {}).get(seq.get("kind") or "timelapse")
+        dlg = SequenceExportDialog(self, self.lang, seq, self.config.get("accent_color", "#00f2fe"), last)
+        if not dlg.exec():
+            return False
+        opts = dlg.options()
+        saved = dict(self.config.get("seq_export") or {})
+        saved[seq.get("kind") or "timelapse"] = opts
+        self.config["seq_export"] = saved
+        save_config(self.config)
+
+        def done(ok, stats):
+            outs = stats.get("outputs") or []
+            if ok and outs:
+                show_in_explorer(outs[0])
+                self.videos_page.refresh()
         self.show_activity()
-        self.sync_page.start_tool(tr(self.lang, "light_title", name=os.path.basename(path)),
-                                  [light_version_job(path, self.lang)], done)
+        title = tr(self.lang, "seq_export_task", g=seq["group"], n=len(seq["frames"]))
+        self.sync_page.start_tool(title, [sequence_video_job(seq, opts, self.lang, dlg.out_dir)], done)
+        return True
 
     def repair_video(self, path):
         def done(ok, stats):
@@ -700,7 +769,9 @@ class MainWindow(QWidget):
             pass
         bring_to_front(self)
 
-    def switch_page(self, idx, btn):
+    def switch_page(self, idx, btn, auto=False):
+        if not auto:
+            self._auto_start_page = False     # el usuario eligio una seccion: no moverlo mas
         self.pages.setCurrentIndex(idx)
         self.btn_nav_sync.setChecked(False)
         self.btn_nav_videos.setChecked(False)
@@ -724,6 +795,9 @@ class MainWindow(QWidget):
         self.sync_page.start_sync("all", only_keys=keys)
 
     def _camera_connection_changed(self, connected, model):
+        if connected and getattr(self, "_auto_start_page", False):
+            self._auto_start_page = False
+            self.switch_page(0, self.btn_nav_sync, auto=True)
         if not connected and self.pages.currentIndex() == self.CAMERA_INDEX:
             self.camera_page.close_page()
 
@@ -745,8 +819,10 @@ class MainWindow(QWidget):
         if tray is not None and not getattr(self, "_really_quit", False) and self.config.get("autostart_enabled", False):
             event.ignore()
             self.hide()
-            if not getattr(self, "_tray_hint_shown", False):
-                self._tray_hint_shown = True
+            # El aviso sale una sola vez en total (antes, en cada arranque)
+            if not self.config.get("tray_hint_shown", False):
+                self.config["tray_hint_shown"] = True
+                save_config(self.config)
                 tray.showMessage("GoPro Sync", tr(self.lang, "tray_hidden_msg"),
                                  QSystemTrayIcon.MessageIcon.Information, 5000)
             return
@@ -903,6 +979,8 @@ def setup_tray(app, window, lang):
             tray.setToolTip(tr(lang, "tray_tooltip_busy", task=task, pct=int(pct)))
     window.sync_page.activity_progress.connect(progress)
     tray.show()
+    # Al salir de la app, sacar el icono (si no, Windows lo deja hasta pasar el mouse)
+    app.aboutToQuit.connect(tray.hide)
     window.tray = tray
     app.setQuitOnLastWindowClosed(False)   # cerrar la ventana no cierra la app si hay bandeja
     return tray

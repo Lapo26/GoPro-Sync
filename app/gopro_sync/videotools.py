@@ -145,12 +145,19 @@ def share_dir():
     return d
 
 
-def light_version_job(src, lang):
-    """Video chico para compartir (WhatsApp, mail): 720p H.264, inicio rapido."""
+def light_version_job(src, lang, out_dir=None):
+    """Video chico para compartir (WhatsApp, mail): 720p H.264, inicio rapido.
+    Se guarda en out_dir (la carpeta elegida) o en la carpeta Videos/GoPro Sync."""
     def run(progress, cancel):
         info = read_mp4_info(src)
         base = os.path.splitext(os.path.basename(src))[0]
-        out = os.path.join(share_dir(), f"{base}_liviano.mp4")
+        d = out_dir or share_dir()
+        os.makedirs(d, exist_ok=True)
+        out = os.path.join(d, f"{base}_liviano.mp4")
+        n = 2
+        while os.path.exists(out):                       # no pisar una version anterior
+            out = os.path.join(d, f"{base}_liviano_{n}.mp4")
+            n += 1
         part = out + ".part.mp4"
         ok, err = run_ffmpeg(["-i", src, "-map", "0:v:0", "-map", "0:a:0?", "-vf", "scale=-2:'min(720,ih)'",
                               "-c:v", "libx264", "-preset", "veryfast", "-crf", "27", "-pix_fmt", "yuv420p",
@@ -556,3 +563,163 @@ def repair_job(src, lang, out_dir=None):
         drop(part)
         return False, tr(lang, "repair_failed")
     return {"name": os.path.basename(src), "size": os.path.getsize(src) or 1, "run": run}
+
+
+# ---- fragmentos de un video (para mandar a alguien)
+CLIP_MODES = ("share", "hd", "original")
+
+
+def _fmt_clip_time(s):
+    s = int(max(0, s))
+    return f"{s // 60:02d}m{s % 60:02d}s"
+
+
+def _unique_path(d, base, ext):
+    out = os.path.join(d, f"{base}{ext}")
+    n = 2
+    while os.path.exists(out):
+        out = os.path.join(d, f"{base}_{n}{ext}")
+        n += 1
+    return out
+
+
+def clip_job(src, start_s, end_s, mode, lang, out_dir=None):
+    """Recorta [start_s, end_s] de un video.
+    mode: "share" = 720p liviano (WhatsApp, mail), "hd" = 1080p de buena
+    calidad, "original" = sin recomprimir (instantaneo, pero el corte cae en
+    el cuadro clave mas cercano, uno o dos segundos antes)."""
+    start_s, end_s = max(0.0, float(start_s)), float(end_s)
+    dur = max(0.1, end_s - start_s)
+
+    def run(progress, cancel):
+        base = os.path.splitext(os.path.basename(src))[0]
+        d = out_dir or share_dir()
+        os.makedirs(d, exist_ok=True)
+        out = _unique_path(d, f"{base}_{_fmt_clip_time(start_s)}-{_fmt_clip_time(end_s)}", ".mp4")
+        part = out + ".part.mp4"
+        args = ["-ss", f"{start_s:.3f}", "-i", src, "-t", f"{dur:.3f}", "-map", "0:v:0", "-map", "0:a:0?"]
+        if mode == "original":
+            args += ["-c", "copy", "-avoid_negative_ts", "make_zero"]
+        elif mode == "hd":
+            args += ["-vf", "scale=-2:'min(1080,ih)'", "-c:v", "libx264", "-preset", "fast", "-crf", "21",
+                     "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k"]
+        else:
+            args += ["-vf", "scale=-2:'min(720,ih)'", "-c:v", "libx264", "-preset", "veryfast", "-crf", "26",
+                     "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k"]
+        args += ["-movflags", "+faststart", part]
+        ok, err = run_ffmpeg(args, dur, progress, cancel)
+        if not ok or not os.path.exists(part) or os.path.getsize(part) == 0:
+            try:
+                os.remove(part)
+            except OSError:
+                pass
+            return False, tr(lang, "ffmpeg_failed", e=err) if err != "cancelled" else err
+        os.replace(part, out)
+        try:
+            shutil.copystat(src, out)          # misma fecha que el video: va al mismo dia en la galeria
+            _copy_creation_time(src, out)
+        except Exception:
+            pass
+        return True, {"output": out, "note": tr(lang, "clip_done", size=_human_size(os.path.getsize(out)))}
+    return {"name": os.path.basename(src), "size": max(1, int(dur * 1000)), "run": run}
+
+
+# ---- secuencias de fotos (time-lapse / rafaga) a video o GIF
+def _concat_list(frames):
+    """Lista para el concat de ffmpeg. Cada foto se lee como un archivo
+    aparte (con un patron %04d un cuadro que falta cortaria el video, y en
+    Windows ffmpeg no acepta comodines)."""
+    fd, path = tempfile.mkstemp(prefix="gpsync_seq_", suffix=".txt")
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write("ffconcat version 1.0\n")
+        for p in frames:
+            q = os.path.abspath(p).replace("\\", "/").replace("'", "'\\''")
+            f.write(f"file '{q}'\n")
+    return path
+
+
+def sequence_filters(opts):
+    """Cadena de filtros de video para la exportacion (sin el retiempo)."""
+    fps = int(opts.get("fps") or 30)
+    width = int(opts.get("width") or 1920)
+    vf = [f"setpts=N/({fps}*TB)"]           # un cuadro por foto, exacto
+    if opts.get("crop169"):
+        vf.append("crop=iw:'min(ih,trunc(iw*9/32)*2)'")
+    # las fotos JPEG son de rango completo: se pasa a rango de video normal
+    # (si no, en algunos celulares el video se ve lavado)
+    vf.append(f"scale='min({width},iw)':-2:flags=lanczos:out_range=tv")
+    if opts.get("deflicker") and opts.get("format") != "gif":
+        vf.append("deflicker=size=7:mode=pm")   # parpadeo de exposicion entre fotos
+    return ",".join(vf)
+
+
+def sequence_export_name(seq, fmt):
+    from datetime import datetime
+    try:
+        day = datetime.fromtimestamp(os.path.getmtime(seq["frames"][0])).strftime("%Y-%m-%d")
+    except OSError:
+        day = ""
+    kind = "Burst" if seq.get("kind") == "burst" else "TimeLapse"
+    base = f"{kind}_G{seq['group']}" + (f"_{day}" if day else "")
+    return base, (".gif" if fmt == "gif" else ".mp4")
+
+
+def sequence_video_job(seq, opts, lang, out_dir=None):
+    """Arma un video MP4 (H.264) o un GIF con las fotos de la secuencia.
+    opts: format ("mp4"/"gif"), fps, width, crop169, deflicker."""
+    frames = list(seq["frames"])
+    fmt = opts.get("format") or "mp4"
+    fps = int(opts.get("fps") or 30)
+    size = 0
+    for p in frames:
+        try:
+            size += os.path.getsize(p)
+        except OSError:
+            pass
+
+    def run(progress, cancel):
+        d = out_dir or seq.get("dir") or share_dir()
+        os.makedirs(d, exist_ok=True)
+        base, ext = sequence_export_name(seq, fmt)
+        out = _unique_path(d, base, ext)
+        part = out + ".part" + ext
+        lst = _concat_list(frames)
+        vf = sequence_filters(opts)
+        args = ["-f", "concat", "-safe", "0", "-i", lst]
+        if fmt == "gif":
+            args += ["-filter_complex",
+                     f"[0:v]{vf},split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=4",
+                     "-r", str(fps), "-loop", "0", "-f", "gif", part]
+        else:
+            from datetime import datetime, timezone
+            try:
+                created = datetime.fromtimestamp(os.path.getmtime(frames[0]), timezone.utc)
+                meta = ["-metadata", "creation_time=" + created.strftime("%Y-%m-%dT%H:%M:%S.000000Z")]
+            except OSError:
+                meta = []
+            args += ["-vf", vf + ",format=yuv420p", "-r", str(fps), "-c:v", "libx264", "-preset", "medium",
+                     "-crf", "18", "-tag:v", "avc1", "-movflags", "+faststart"] + meta + ["-f", "mp4", part]
+        try:
+            ok, err = run_ffmpeg(args, len(frames) / float(fps), progress, cancel)
+        finally:
+            try:
+                os.remove(lst)
+            except OSError:
+                pass
+        if not ok or not os.path.exists(part) or os.path.getsize(part) == 0:
+            try:
+                os.remove(part)
+            except OSError:
+                pass
+            return False, tr(lang, "ffmpeg_failed", e=err) if err != "cancelled" else err
+        os.replace(part, out)
+        try:
+            shutil.copystat(frames[0], out)    # fecha de la primera foto: queda en ese dia de la galeria
+            _copy_creation_time(frames[0], out)
+        except Exception:
+            pass
+        secs = len(frames) / float(fps)
+        return True, {"output": out, "note": tr(lang, "seq_export_done", name=os.path.basename(out),
+                                               dur=f"{int(secs // 60)}:{int(secs % 60):02d}",
+                                               size=_human_size(os.path.getsize(out)))}
+    return {"name": f"G{seq['group']} · {len(frames)}", "size": size or 1, "run": run}

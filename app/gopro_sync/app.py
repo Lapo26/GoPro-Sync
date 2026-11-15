@@ -16,9 +16,60 @@ from .videotools import ffmpeg_exe
 from .ui.graphics import GlowHoverAnimator, install_qt_translations, load_app_icon, set_boot_progress
 from .ui.main_window import AnimatedSplash, MainWindow, setup_tray
 
+class _SingleInstance:
+    """Canal local por usuario: la primera copia escucha; las siguientes le
+    mandan "show" y salen."""
+    def __init__(self):
+        import getpass
+        from PySide6.QtNetwork import QLocalServer, QLocalSocket
+        try:
+            user = getpass.getuser()
+        except Exception:
+            user = "user"
+        self.name = "GoProSyncPro-" + "".join(c for c in user if c.isalnum())
+        self.window = None
+        self.server = None
+        probe = QLocalSocket()
+        probe.connectToServer(self.name)
+        self.already_running = probe.waitForConnected(500)
+        if self.already_running:
+            self._probe = probe
+            return
+        QLocalServer.removeServer(self.name)          # restos de una copia que se corto
+        self.server = QLocalServer()
+        self.server.newConnection.connect(self._on_connection)
+        self.server.listen(self.name)
+
+    def ask_to_show(self):
+        self._probe.write(b"show")
+        self._probe.flush()
+        self._probe.waitForBytesWritten(1000)
+        self._probe.disconnectFromServer()
+
+    def _on_connection(self):
+        conn = self.server.nextPendingConnection()
+        if conn is None:
+            return
+        def read():
+            if bytes(conn.readAll()).startswith(b"show") and self.window is not None:
+                bring_to_front(self.window)
+            conn.disconnectFromServer()
+        conn.readyRead.connect(read)
+        conn.disconnected.connect(conn.deleteLater)
+
+
 def main():
     minimize_own_console()
     app = QApplication(sys.argv)
+    # Una sola copia de la app: si ya hay una corriendo (por ejemplo en la
+    # bandeja), se le pide que muestre su ventana y esta se cierra. Antes
+    # cada apertura sumaba otra copia con su propio icono junto al reloj.
+    instance = _SingleInstance()
+    if instance.already_running:
+        if "--silent" not in sys.argv:
+            instance.ask_to_show()
+        return 0
+    app._single_instance = instance
     app.setWindowIcon(load_app_icon())
     install_dark_titlebars(app)       # respaldo: otras ventanas, al recibir el foco
 
@@ -56,6 +107,7 @@ def main():
         # junto al reloj vigilando la camara; la ventana se abre con un clic
         # en el icono (o sola al conectar la GoPro si esta activado).
         window = MainWindow()
+        instance.window = window
         app.commitDataRequest.connect(window.on_session_end)
         setup_tray(app, window, config.get("language", "es"))
         if open_on_connect:
@@ -85,6 +137,7 @@ def main():
         set_boot_progress(_boot)
         start_time = time.monotonic()
         window = MainWindow()
+        instance.window = window
         app.commitDataRequest.connect(window.on_session_end)
         set_boot_progress(None)
         splash.set_status(100, tr(boot_lang, "boot_done"))

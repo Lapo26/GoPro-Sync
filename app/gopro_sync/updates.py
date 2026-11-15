@@ -46,37 +46,60 @@ class UpdateCheckThread(QThread):
                 return n.endswith(".appimage")
             asset = next((a for a in data.get("assets") or [] if wanted(a.get("name", ""))), None)
             if asset:
-                self.found.emit({"version": tag, "url": asset["browser_download_url"], "size": asset.get("size", 0),
-                                 "page": data.get("html_url", "")})
+                url = asset.get("browser_download_url") or ""
+                if not url.startswith(f"https://github.com/{GITHUB_REPO}/releases/download/"):
+                    print("[Actualizaciones] URL de descarga inesperada:", url)
+                    return
+                self.found.emit({"version": tag, "url": url, "size": asset.get("size", 0),
+                                 "sha256": _asset_sha256(asset), "page": data.get("html_url", "")})
         except Exception as e:
             print("[Actualizaciones]", e)
+
+
+def _asset_sha256(asset):
+    """SHA-256 que GitHub calcula para cada archivo del Release ("sha256:<hex>"),
+    o None si no viene (sin hash no se instala nada en silencio)."""
+    m = re.fullmatch(r"sha256:([0-9a-fA-F]{64})", asset.get("digest") or "")
+    return m.group(1).lower() if m else None
 
 
 class UpdateDownloadThread(QThread):
     progress = Signal(int)
     done = Signal(str, str)       # ruta, error
 
-    def __init__(self, url, dest):
+    def __init__(self, url, dest, sha256, size=0):
         super().__init__()
         self.url, self.dest = url, dest
+        self.sha256, self.size = sha256, int(size or 0)
         self._cancel = False
 
     def run(self):
+        import hashlib
         part = self.dest + ".part"
         try:
+            if not self.sha256:
+                raise RuntimeError("el Release no publica el SHA-256 del instalador")
+            h = hashlib.sha256()
+            got = 0
             with _http_get(self.url, timeout=30) as r, open(part, "wb") as f:
-                total = int(r.headers.get("Content-Length") or 0)
-                got = 0
+                if not r.geturl().startswith("https://"):
+                    raise RuntimeError("la descarga no usa HTTPS")
+                total = self.size or int(r.headers.get("Content-Length") or 0)
                 while not self._cancel:
                     buf = r.read(256 * 1024)
                     if not buf:
                         break
                     f.write(buf)
+                    h.update(buf)
                     got += len(buf)
                     if total:
-                        self.progress.emit(int(got * 100 / total))
+                        self.progress.emit(min(100, int(got * 100 / total)))
             if self._cancel:
                 raise RuntimeError("cancelado")
+            if self.size and got != self.size:
+                raise RuntimeError(f"tamaño incorrecto ({got} de {self.size} bytes)")
+            if h.hexdigest() != self.sha256:
+                raise RuntimeError("el instalador descargado no coincide con el SHA-256 del Release")
             os.replace(part, self.dest)
             self.done.emit(self.dest, "")
         except Exception as e:
@@ -146,16 +169,18 @@ class UpdateDialog(QDialog):
         lay.addLayout(row)
 
     def _download(self):
-        if not IS_WINDOWS:
-            # macOS / Linux: se baja el .dmg / .AppImage desde la pagina del Release
+        if not IS_WINDOWS or not self.info.get("sha256"):
+            # macOS / Linux (o un Release sin SHA-256): se baja a mano desde la pagina del Release
             QDesktopServices.openUrl(QUrl(self.info.get("page") or self.info["url"]))
             self.accept()
             return
         self.btn_now.setEnabled(False)
         self.bar.show()
         self.lbl_status.setText(tr(self.lang, "update_downloading", pct=0))
-        dest = os.path.join(tempfile.gettempdir(), f"GoProSync-Setup-{self.info['version']}.exe")
-        self.worker = UpdateDownloadThread(self.info["url"], dest)
+        # Carpeta temporal propia (nombre impredecible) y version saneada para el nombre del archivo.
+        version = re.sub(r"[^0-9A-Za-z.\-]", "_", self.info["version"])
+        dest = os.path.join(tempfile.mkdtemp(prefix="GoProSync-update-"), f"GoProSync-Setup-{version}.exe")
+        self.worker = UpdateDownloadThread(self.info["url"], dest, self.info.get("sha256"), self.info.get("size"))
         self.worker.progress.connect(lambda pct: (self.bar.setValue(pct),
                                                   self.lbl_status.setText(tr(self.lang, "update_downloading", pct=pct))))
         self.worker.done.connect(self._on_downloaded)

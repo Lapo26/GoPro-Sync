@@ -297,12 +297,18 @@ def set_autostart(enabled):
 
 
 def move_to_recycle_bin(path):
-    """Mueve un archivo a la Papelera de reciclaje (no lo borra para siempre).
-    Devuelve True si el archivo ya no esta en su lugar."""
+    """Mueve un archivo (o una lista de archivos, en una sola operacion) a la
+    Papelera de reciclaje (no lo borra para siempre). Devuelve True si ya no
+    queda ninguno en su lugar."""
+    paths = [path] if isinstance(path, str) else [p for p in path if p]
+    if not paths:
+        return True
     if not IS_WINDOWS:
         try:
             from PySide6.QtCore import QFile
-            return bool(QFile.moveToTrash(path)) or not os.path.exists(path)
+            for p in paths:
+                QFile.moveToTrash(p)
+            return not any(os.path.exists(p) for p in paths)
         except Exception:
             return False
     try:
@@ -315,10 +321,11 @@ def move_to_recycle_bin(path):
         FO_DELETE, FOF_SILENT, FOF_NOCONFIRMATION, FOF_ALLOWUNDO, FOF_NOERRORUI = 3, 0x4, 0x10, 0x40, 0x400
         op = SHFILEOPSTRUCTW()
         op.wFunc = FO_DELETE
-        op.pFrom = os.path.abspath(path) + "\0"        # lista terminada en doble NUL
+        buf = ctypes.create_unicode_buffer("\0".join(os.path.abspath(p) for p in paths) + "\0\0")
+        op.pFrom = ctypes.cast(buf, wintypes.LPCWSTR)   # lista separada por NUL y terminada en doble NUL
         op.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI
         res = ctypes.windll.shell32.SHFileOperationW(ctypes.byref(op))
-        return res == 0 and not op.fAnyOperationsAborted and not os.path.exists(path)
+        return res == 0 and not op.fAnyOperationsAborted and not any(os.path.exists(p) for p in paths)
     except Exception as e:
         print(f"[Papelera] No se pudo mover {path}: {e}")
         return False

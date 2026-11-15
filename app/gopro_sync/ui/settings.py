@@ -546,6 +546,16 @@ class SettingsDialog(QDialog):
         sort_hint.setWordWrap(True)
         folder_layout.addWidget(sort_hint)
 
+        self.chk_seq_folders = ToggleSwitch(tr(self.lang, "seq_folders_checkbox"))
+        self.chk_seq_folders.set_accent(self.config.get("accent_color", "#00f2fe"))
+        self.chk_seq_folders.setChecked(self.config.get("sequence_folders", False), animate=False)
+        self.chk_seq_folders.toggled.connect(self.on_seq_folders_toggle)
+        folder_layout.addWidget(self.chk_seq_folders)
+        seq_hint = QLabel(tr(self.lang, "seq_folders_hint"))
+        seq_hint.setStyleSheet("color: #777; font-size: 11px;")
+        seq_hint.setWordWrap(True)
+        folder_layout.addWidget(seq_hint)
+
         # --- Cache de miniaturas ---
         cache_title = QLabel(tr(self.lang, "thumb_cache_label"))
         cache_title.setStyleSheet("font-size: 13px; font-weight: 700;")
@@ -786,6 +796,10 @@ class SettingsDialog(QDialog):
 
     def on_sort_dates_toggle(self, state):
         self.config["sort_into_date_folders"] = bool(state)
+        save_config(self.config)
+
+    def on_seq_folders_toggle(self, state):
+        self.config["sequence_folders"] = bool(state)
         save_config(self.config)
 
     def pick_cache_dir(self):

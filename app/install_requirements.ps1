@@ -1,7 +1,7 @@
 # =============================================================
 #  GoPro Sync Pro - Setup-Skript
 #  Installiert (falls noetig) Python und alle benoetigten
-#  Python-Pakete (PySide6, opencv-python, bleak).
+#  Python-Pakete (PySide6, bleak, imageio-ffmpeg).
 #
 #  Einfach doppelklicken auf "install.bat" im selben Ordner,
 #  oder dieses Skript manuell starten mit:
@@ -58,7 +58,7 @@ if (Test-Path $reqFile) {
     python -m pip install --upgrade -r $reqFile
 } else {
     Write-Host "requirements.txt nicht gefunden - installiere Pakete direkt..." -ForegroundColor Yellow
-    python -m pip install --upgrade PySide6 opencv-python bleak
+    python -m pip install --upgrade PySide6 bleak imageio-ffmpeg
 }
 
 Write-Host ""

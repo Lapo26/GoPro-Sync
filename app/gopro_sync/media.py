@@ -421,9 +421,20 @@ def _gpmd_sample_ranges(moov):
 _GPMF_FMT = {"b": "b", "B": "B", "s": "h", "S": "H", "l": "i", "L": "I", "f": "f", "d": "d", "j": "q", "J": "Q"}
 
 
+def _gpsu_seconds(raw):
+    """GPSU "yymmddhhmmss.sss" -> segundos (epoch UTC), o None."""
+    try:
+        t = raw.decode("ascii", "ignore").strip("\x00 ")
+        dt = datetime.strptime(t[:12], "%y%m%d%H%M%S")
+        frac = float("0" + t[12:16]) if len(t) > 12 else 0.0
+        return dt.replace(tzinfo=timezone.utc).timestamp() + frac
+    except Exception:
+        return None
+
+
 def _gpmf_walk(buf, pos, end, out):
     """Recorre el KLV de GPMF y junta los puntos GPS5 (con su SCAL y la calidad)."""
-    scal, fix, prec = None, 3, 0
+    scal, fix, prec, utc = None, 3, 0, None
     while pos + 8 <= end:
         key = buf[pos:pos + 4]
         typ = chr(buf[pos + 4])
@@ -435,6 +446,8 @@ def _gpmf_walk(buf, pos, end, out):
             break
         if buf[pos + 4] == 0:                       # contenedor (DEVC / STRM)
             _gpmf_walk(buf, dstart, dstart + dlen, out)
+        elif key == b"GPSU" and typ == "U":         # hora UTC del GPS: "yymmddhhmmss.sss"
+            utc = _gpsu_seconds(buf[dstart:dstart + dlen])
         elif key in (b"SCAL", b"GPSF", b"GPSP", b"GPS5") and typ in _GPMF_FMT:
             fmt = _GPMF_FMT[typ]
             width = struct.calcsize(fmt)
@@ -453,12 +466,12 @@ def _gpmf_walk(buf, pos, end, out):
                     lat, lon, alt, v2, _v3 = (vals[i + k] / (sc[k] or 1) for k in range(5))
                     if -90 <= lat <= 90 and -180 <= lon <= 180 and (lat or lon):
                         block.append((lat, lon, alt, v2))
-                out.append((fix, prec, block))       # un bloque por segundo, con su calidad
+                out.append((fix, prec, block, utc))  # un bloque por muestra, con su calidad y hora
         pos = dstart + ((dlen + 3) & ~3)
 
 
 def read_gopro_gps(path):
-    """Bloques (fix, precision, [(lat, lon, alt m, velocidad 2D m/s)]) del GPS de un video."""
+    """Bloques (fix, precision, [(lat, lon, alt m, velocidad 2D m/s)], hora UTC) del GPS de un video."""
     moov = _read_moov(path)
     if not moov:
         return []
@@ -471,6 +484,79 @@ def read_gopro_gps(path):
             buf = f.read(size)
             _gpmf_walk(buf, 0, len(buf), pts)
     return pts
+
+
+def has_gps_fix(path, samples=24):
+    """Rapido: True si el video tiene algun tramo con buena senal GPS (lo
+    que hace falta para el mapa). Mira ~24 muestras repartidas a lo largo
+    del video en vez de leer toda la telemetria."""
+    moov = _read_moov(path)
+    if not moov:
+        return False
+    ranges = _gpmd_sample_ranges(moov)
+    if not ranges:
+        return False
+    step = max(1, len(ranges) // samples)
+    with open(path, "rb") as f:
+        for off, size in ranges[::step]:
+            if size <= 0 or size > 4 * 1024 * 1024:
+                continue
+            f.seek(off)
+            buf = f.read(size)
+            out = []
+            _gpmf_walk(buf, 0, len(buf), out)
+            for fix, prec, pts, *_ in out:
+                if fix >= 2 and (prec == 0 or prec < 500) and pts:
+                    return True
+    return False
+
+
+_GPS_CACHE = None
+_GPS_CACHE_LOCK = None
+
+
+def gps_flags(paths, cache_file):
+    """{ruta: True/False} si cada video tiene GPS con senal. Guarda el
+    resultado en cache_file (por ruta, tamano y fecha) para no volver a
+    leer los videos cada vez que se abre la galeria."""
+    import json
+    import threading
+    global _GPS_CACHE, _GPS_CACHE_LOCK
+    if _GPS_CACHE_LOCK is None:
+        _GPS_CACHE_LOCK = threading.Lock()
+    with _GPS_CACHE_LOCK:
+        if _GPS_CACHE is None:
+            try:
+                with open(cache_file, encoding="utf-8") as fh:
+                    _GPS_CACHE = json.load(fh)
+            except Exception:
+                _GPS_CACHE = {}
+        cache = _GPS_CACHE
+        out, changed = {}, False
+        for p in paths:
+            try:
+                st = os.stat(p)
+            except OSError:
+                continue
+            key = f"{os.path.normcase(p)}|{st.st_size}|{int(st.st_mtime)}"
+            val = cache.get(key)
+            if val is None:
+                try:
+                    val = has_gps_fix(p)
+                except Exception:
+                    val = False
+                cache[key] = val
+                changed = True
+            out[p] = bool(val)
+        if changed:
+            try:
+                tmp = cache_file + ".part"
+                with open(tmp, "w", encoding="utf-8") as fh:
+                    json.dump(cache, fh)
+                os.replace(tmp, cache_file)
+            except Exception:
+                pass
+        return out
 
 
 def _haversine(a, b):
@@ -488,11 +574,19 @@ def clean_gps(blocks, duration):
     de la velocidad del GPS (Doppler, confiable) a lo largo del tiempo."""
     if not blocks:
         return None
+    # Segundos reales por bloque. En un video normal sale de la duracion
+    # (un bloque por segundo), pero en un time-lapse / TimeWarp cada cuadro
+    # trae su propio bloque y entre cuadros pasa mucho mas tiempo del que
+    # dura el video: ahi se usa la hora UTC que graba el GPS (GPSU).
     sec = (duration / len(blocks)) if duration else 1.0
+    times = [b[3] for b in blocks if len(b) > 3 and b[3]]
+    real = (times[-1] - times[0]) if len(times) >= 2 else 0
+    if real > 0 and (not duration or real > duration * 1.5):
+        sec = real / max(1, len(blocks) - 1)
     ok = lambda f, d: d == 0 or d < 500
-    min_fix = 3 if any(f >= 3 and ok(f, d) and pts for f, d, pts in blocks) else 2
+    min_fix = 3 if any(f >= 3 and ok(f, d) and pts for f, d, pts, *_ in blocks) else 2
     pts_out, speeds, kept_med, gap = [], [], None, 0
-    for f, d, pts in blocks:
+    for f, d, pts, *_ in blocks:
         gap += 1
         if f < min_fix or not ok(f, d) or not pts:
             continue
@@ -509,15 +603,18 @@ def clean_gps(blocks, duration):
         pts_out.extend(pts)
         speeds.append(v)
     if len(pts_out) < 2:
-        return None
+        return {"points": [], "nofix": True}   # hay GPS pero nunca tuvo buena senal
     dist = sum(speeds) * sec
     alts = sorted(p[2] for p in pts_out)
     return {"points": pts_out,
             "dist": dist,
-            "vmax": max(speeds) * 3.6,
+            # en un time-lapse cada muestra es un unico punto y un pico suelto
+            # del GPS (340 km/h) arruinaba el maximo: se ignora el 0,5 % mas alto
+            "vmax": (sorted(speeds)[int(len(speeds) * 0.995)] if len(speeds) >= 200 else max(speeds)) * 3.6,
             "vavg": (dist / (len(speeds) * sec) * 3.6) if speeds else 0,
             "amin": alts[int(len(alts) * 0.05)],
-            "amax": alts[min(len(alts) - 1, int(len(alts) * 0.95))]}
+            "amax": alts[min(len(alts) - 1, int(len(alts) * 0.95))],
+            "elapsed": sec * len(blocks)}            # tiempo real grabado (en un time-lapse, mas que el video)
 
 
 def read_gopro_track(path):
