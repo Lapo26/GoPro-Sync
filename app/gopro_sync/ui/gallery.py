@@ -114,10 +114,13 @@ class GalleryBase(QWidget):
         self.btn_sel_join.clicked.connect(self._join_selected)
         self.btn_sel_light = QPushButton(tr(lang, "sel_light"))
         self.btn_sel_light.clicked.connect(self._light_selected)
+        self.btn_sel_hl = QPushButton(tr(lang, "sel_hilights"))
+        self.btn_sel_hl.clicked.connect(self._hilights_selected)
         self.btn_sel_cancel = QPushButton(tr(lang, "sel_cancel"))
         self.btn_sel_cancel.clicked.connect(self.exit_selection)
         bar.addWidget(self.lbl_sel)
         bar.addStretch()
+        bar.addWidget(self.btn_sel_hl)
         bar.addWidget(self.btn_sel_light)
         bar.addWidget(self.btn_sel_join)
         bar.addWidget(self.btn_sel_cancel)
@@ -186,6 +189,7 @@ class GalleryBase(QWidget):
         self._sel_had_items = False
         self.btn_sel_join.setVisible(self.KIND == "video")
         self.btn_sel_light.setVisible(self.KIND == "video")
+        self.btn_sel_hl.setVisible(self.KIND == "video")
         self.sel_bar.show()
         self.view.viewport().update()
         self._update_selection_bar()
@@ -215,6 +219,13 @@ class GalleryBase(QWidget):
         self.lbl_sel.setText(tr(self.lang, "sel_count", n=len(sel), size=_human_size(total)))
         self.btn_sel_join.setEnabled(len(sel) >= 2)
         self.btn_sel_light.setEnabled(len(sel) >= 1)
+        self.btn_sel_hl.setEnabled(any(self.view.hilights.get(x) for x in sel))
+
+    def _hilights_selected(self):
+        sel = [x for x in self.view.files if x in self.view.selected]
+        main = self.window()
+        if hasattr(main, "export_hilights_many") and main.export_hilights_many(sel):
+            self.exit_selection()
 
     def _light_selected(self):
         sel = [x for x in self.view.files if x in self.view.selected]
@@ -331,10 +342,19 @@ class GalleryBase(QWidget):
         if self.KIND == "video" and hasattr(main, "make_light_version"):
             menu.addSeparator()
             menu.addAction(tr(self.lang, "ctx_light"), lambda: main.make_light_version(path))
+            n_hl = self.view.hilights.get(path)
+            if n_hl and hasattr(main, "export_hilights"):
+                menu.addAction(tr(self.lang, "ctx_hilights", n=n_hl), lambda: self._export_hilights(path))
             if not self.view.selectable:
                 menu.addAction(tr(self.lang, "ctx_select_many"), lambda: self.enter_selection(path))
             menu.addAction(tr(self.lang, "ctx_map"), lambda: GpsMapDialog(
                 self, self.lang, path, getattr(main, "get_current_theme_color", lambda: "#00f2fe")()).exec())
+            if path in self.view.gps and hasattr(main, "export_track"):
+                sub = menu.addMenu(tr(self.lang, "track_export_menu"))
+                sub.addAction(tr(self.lang, "track_gpx"), lambda: main.export_track(path, "gpx"))
+                sub.addAction(tr(self.lang, "track_kml"), lambda: main.export_track(path, "kml"))
+                if hasattr(main, "make_overlay"):
+                    menu.addAction(tr(self.lang, "ov_menu"), lambda: main.make_overlay(path))
             if os.path.exists(path) and os.path.getsize(path) > 0 and is_broken_mp4(path):
                 menu.addAction(tr(self.lang, "ctx_repair"), lambda: main.repair_video(path))
             group = chapter_group_of(path)
@@ -621,6 +641,7 @@ class VideoGallery(GalleryBase):
         r = super().refresh(*a, **k)
         self._update_chapter_marks()
         self._update_gps_marks()
+        self.refresh_hilight_marks()
         return r
 
     def _update_gps_marks(self):
@@ -634,6 +655,35 @@ class VideoGallery(GalleryBase):
         th.done.connect(lambda _t, flags: self._apply_gps_marks(flags))
         self._gps_thread = th
         th.start()
+
+    def refresh_hilight_marks(self):
+        """Etiqueta con la cantidad de momentos HiLight (de la camara y
+        marcados a mano). Se lee en segundo plano y queda en cache."""
+        files = list(self.view.files)
+        if not files:
+            return
+
+        def scan():
+            from ..telemetry import hilight_counts
+            from ..library import LIBRARY
+            counts = hilight_counts(files)
+            return {p: counts.get(p, 0) + len(LIBRARY.marks_of(p)) for p in files}
+        th = ScanThread(0, scan)
+        th.done.connect(lambda _t, counts: self._apply_hilight_marks(counts))
+        self._hl_thread = th
+        th.start()
+
+    def _apply_hilight_marks(self, counts):
+        self.view.hilights = {p: n for p, n in (counts or {}).items() if n}
+        self.view.viewport().update()
+        if self.view.selectable:
+            self._update_selection_bar()
+
+    def _export_hilights(self, path):
+        from ..telemetry import read_hilights
+        from ..library import LIBRARY
+        marks = sorted(set(read_hilights(path)) | set(LIBRARY.marks_of(path)))
+        self.window().export_hilights(path, marks)
 
     def _apply_gps_marks(self, flags):
         self.view.gps = {p for p, ok in (flags or {}).items() if ok}

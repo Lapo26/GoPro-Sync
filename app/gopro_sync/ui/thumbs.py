@@ -470,6 +470,8 @@ class ThumbGridView(QAbstractScrollArea):
         # Videos con recorrido GPS: mapita arriba a la derecha de la miniatura
         self.gps = set()
         self._gps_icon = None
+        # Videos con momentos HiLight: ruta -> cantidad (etiqueta amarilla arriba a la izquierda)
+        self.hilights = {}
         self.accent = QColor("#00f2fe")
         self.header_font = QFont("Century Gothic")
         self.header_font.setPixelSize(13)
@@ -688,6 +690,11 @@ class ThumbGridView(QAbstractScrollArea):
                     painter.save()
                     self._paint_gps(painter, r)
                     painter.restore()
+                n_hl = self.hilights.get(path)
+                if n_hl:
+                    painter.save()
+                    self._paint_hilights(painter, r, n_hl)
+                    painter.restore()
                 ch = self.chapters.get(path)
                 if ch:
                     painter.save()      # que el relleno de la marca no quede para las siguientes miniaturas
@@ -759,6 +766,33 @@ class ThumbGridView(QAbstractScrollArea):
             painter.setPen(QPen(QColor(color), 3))
             painter.drawPath(clip)
         self._pill(painter, r.left() + 8, r.bottom() - 8, f"{i}/{n}", color)
+
+    def _paint_hilights(self, painter, r, count):
+        """Etiqueta "★ 3": el video tiene momentos HiLight (o marcados a mano).
+        En modo seleccion se corre a la derecha del circulo de elegir."""
+        f = QFont(self.header_font)
+        f.setPixelSize(11)
+        painter.setFont(f)
+        import math
+        text = str(count)
+        w = painter.fontMetrics().horizontalAdvance(text) + 34
+        x = r.left() + (40 if self.selectable else 8)
+        pill = QRectF(x, r.top() + 8, w, 22)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#ffd166"))
+        painter.drawRoundedRect(pill, 11, 11)
+        # estrella dibujada (Century Gothic no tiene el caracter y buscar otra fuente es lento)
+        cx, cy = pill.left() + 13, pill.center().y()
+        star = QPainterPath()
+        for k in range(10):
+            rad = 6.5 if k % 2 == 0 else 2.8
+            a = -math.pi / 2 + k * math.pi / 5
+            pt = QPointF(cx + rad * math.cos(a), cy + rad * math.sin(a))
+            (star.moveTo if k == 0 else star.lineTo)(pt)
+        star.closeSubpath()
+        painter.fillPath(star, QColor("#0d0d12"))
+        painter.setPen(QColor("#0d0d12"))
+        painter.drawText(QRectF(pill.left() + 22, pill.top(), w - 26, pill.height()), Qt.AlignmentFlag.AlignCenter, text)
 
     def _paint_gps(self, painter, r):
         """Mapita: el video tiene recorrido GPS (se ve en el reproductor)."""

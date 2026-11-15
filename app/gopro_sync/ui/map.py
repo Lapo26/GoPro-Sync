@@ -508,7 +508,15 @@ class TileMapWidget(QWidget):
         """Mueve el punto blanco a la parte del recorrido que se esta viendo."""
         if not self.points:
             return
-        idx = int(max(0.0, min(1.0, fraction)) * (len(self.points) - 1))
+        fr = max(0.0, min(1.0, fraction))
+        fracs = getattr(self, "fracs", None)
+        if fracs and len(fracs) == len(self.points):
+            # en que parte del video esta cada punto: si el GPS tardo en
+            # agarrar senal, el recorrido no empieza en el segundo 0
+            import bisect
+            idx = min(len(self.points) - 1, bisect.bisect_left(fracs, fr))
+        else:
+            idx = int(fr * (len(self.points) - 1))
         if idx != self.marker:
             old, self.marker = self._marker_rect(self.marker), idx
             # redibuja solo el punto (donde estaba y donde queda) y la telemetria
@@ -557,10 +565,24 @@ class GpsMapDialog(QDialog):
         self.lbl_hint.setStyleSheet("font-size: 11px; color: rgba(255,255,255,0.45);")
         self.btn_osm = QPushButton(tr(lang, "gps_open_osm"))
         self.btn_osm.hide()
+        # Guardar el recorrido como GPX / KML (lo hace la ventana principal)
+        self.btn_gpx = QPushButton(tr(lang, "track_gpx_btn"))
+        self.btn_kml = QPushButton(tr(lang, "track_kml_btn"))
+        for b, fmt in ((self.btn_gpx, "gpx"), (self.btn_kml, "kml")):
+            b.setToolTip(tr(lang, "track_gpx" if fmt == "gpx" else "track_kml"))
+            b.clicked.connect(lambda _c=False, f=fmt: self._export(f))
+            b.hide()
+        self.btn_overlay = QPushButton(tr(lang, "ov_btn"))
+        self.btn_overlay.setToolTip(tr(lang, "ov_menu"))
+        self.btn_overlay.clicked.connect(self._overlay)
+        self.btn_overlay.hide()
         close = QPushButton(tr(lang, "close_btn2"))
         close.clicked.connect(self.accept)
         foot.addWidget(self.lbl_hint)
         foot.addStretch()
+        foot.addWidget(self.btn_gpx)
+        foot.addWidget(self.btn_kml)
+        foot.addWidget(self.btn_overlay)
         foot.addWidget(self.btn_osm)
         foot.addWidget(close)
         self.lay.addLayout(foot)
@@ -589,6 +611,22 @@ class GpsMapDialog(QDialog):
         self.btn_osm.clicked.connect(lambda: QDesktopServices.openUrl(
             QUrl(f"https://www.openstreetmap.org/?mlat={lat:.5f}&mlon={lon:.5f}#map=14/{lat:.5f}/{lon:.5f}")))
         self.btn_osm.show()
+        main = self.parent().window() if self.parent() is not None else None
+        if main is not None and hasattr(main, "export_track"):
+            self.btn_gpx.show()
+            self.btn_kml.show()
+        if main is not None and hasattr(main, "make_overlay"):
+            self.btn_overlay.show()
+
+    def _overlay(self):
+        main = self.parent().window() if self.parent() is not None else None
+        if main is not None and hasattr(main, "make_overlay"):
+            main.make_overlay(self.path, parent=self)
+
+    def _export(self, fmt):
+        main = self.parent().window() if self.parent() is not None else None
+        if main is not None and hasattr(main, "export_track"):
+            main.export_track(self.path, fmt, parent=self)
 
     def done(self, r):
         if self.map is not None:

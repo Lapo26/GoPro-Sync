@@ -239,6 +239,12 @@ class VideoPlayerDialog(QDialog):
         self.player.positionChanged.connect(self.on_position_changed)
         self.player.durationChanged.connect(self.on_duration_changed)
         self.player.mediaStatusChanged.connect(self._on_media_status)
+        # Momentos HiLight (los de la camara y los marcados a mano)
+        from ..ui.hilights import HiLightExtras
+        self.hilight_extras = HiLightExtras(self, c_layout, _round_btn)
+        # Grafico de velocidad y altura debajo del video (boton o tecla G)
+        from ..ui.telemetry_panel import TelemetryExtras
+        self.telemetry_extras = TelemetryExtras(self, c_layout, layout, _round_btn)
         # Abrir el video bloqueaba la ventana ~1-3 s antes de mostrarse (Qt lee
         # el indice, que en la GoPro esta al FINAL del archivo, en el disco).
         # Ahora: la ventana aparece ya con "Cargando video...", el indice se
@@ -431,6 +437,7 @@ class VideoPlayerDialog(QDialog):
                 if self.parent() is not None else "#00f2fe"
             self.map_panel = TileMapWidget(self._track["points"], accent, self, elapsed=self._track.get("elapsed"),
                                            lang=getattr(self, "lang", "es"))
+            self.map_panel.fracs = self._track.get("fracs")     # mismo momento que el grafico
             self.map_panel.setMinimumSize(320, 240)
             self.split.addWidget(self.map_panel)
             self.split.setSizes([max(400, self.width() - 420), 420])
@@ -626,8 +633,43 @@ class SeekSlider(QSlider):
     recortar (mark_in / mark_out, en ms)."""
     mark_in = None
     mark_out = None
+    hilights = ()          # momentos HiLight de la camara (ms): rayita amarilla sobre la barra
+    user_marks = ()        # momentos marcados a mano (ms): rayita blanca sobre la barra
+    jump_marks = ()        # saltos detectados (ms): punto naranja abajo
+
+    def _paint_moments(self):
+        if self.maximum() <= self.minimum() or not (self.hilights or self.user_marks or self.jump_marks):
+            return
+        opt = QStyleOptionSlider()
+        self.initStyleOption(opt)
+        groove = self.style().subControlRect(QStyle.ComplexControl.CC_Slider, opt,
+                                             QStyle.SubControl.SC_SliderGroove, self)
+        handle = self.style().subControlRect(QStyle.ComplexControl.CC_Slider, opt,
+                                             QStyle.SubControl.SC_SliderHandle, self)
+        span = max(1, groove.width() - handle.width())
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
+        cy = self.height() / 2
+        for values, color, top in ((self.jump_marks, "#ff9f1c", False), (self.user_marks, "#ffffff", True),
+                                   (self.hilights, "#ffd166", True)):
+            p.setBrush(QColor(color))
+            for v in values:
+                if not self.minimum() <= v <= self.maximum():
+                    continue
+                x = groove.x() + handle.width() / 2 + QStyle.sliderPositionFromValue(
+                    self.minimum(), self.maximum(), int(v), span)
+                if top:
+                    p.setPen(QPen(QColor(0, 0, 0, 160), 1))
+                    p.drawRoundedRect(QRectF(x - 2.5, cy - 8, 5, 16), 2, 2)
+                    p.setPen(Qt.PenStyle.NoPen)
+                else:
+                    p.drawEllipse(QPointF(x, cy + 8), 2.5, 2.5)
+        p.end()
+
     def paintEvent(self, event):
         super().paintEvent(event)
+        self._paint_moments()
         if self.mark_in is None or self.maximum() <= self.minimum():
             return
         opt = QStyleOptionSlider()

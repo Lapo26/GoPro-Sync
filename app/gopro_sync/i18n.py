@@ -1446,6 +1446,12 @@ def strip_emoji(text):
     return " " + out if text[:1] == " " and out else out
 
 
+# Textos de las funciones nuevas (momentos HiLight), en su propio archivo.
+from .i18n_extra import EXTRA_TEXTS as _EXTRA_TEXTS  # noqa: E402
+for _lang, _texts in _EXTRA_TEXTS.items():
+    TRANSLATIONS.setdefault(_lang, {}).update(_texts)
+
+
 def tr(lang, key, **kwargs):
     table = TRANSLATIONS.get(lang, TRANSLATIONS["en"])
     text = strip_emoji(table.get(key, TRANSLATIONS["en"].get(key, TRANSLATIONS["de"].get(key, key))))

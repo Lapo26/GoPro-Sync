@@ -624,6 +624,106 @@ def clip_job(src, start_s, end_s, mode, lang, out_dir=None):
     return {"name": os.path.basename(src), "size": max(1, int(dur * 1000)), "run": run}
 
 
+def _clip_codec_args(mode):
+    """Codificacion de un fragmento: igual que en clip_job."""
+    if mode == "original":
+        return ["-c", "copy", "-avoid_negative_ts", "make_zero"]
+    if mode == "hd":
+        return ["-vf", "scale=-2:'min(1080,ih)'", "-c:v", "libx264", "-preset", "fast", "-crf", "21",
+                "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k"]
+    return ["-vf", "scale=-2:'min(720,ih)'", "-c:v", "libx264", "-preset", "veryfast", "-crf", "26",
+            "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k"]
+
+
+def hilight_segments(marks_ms, before, after, duration):
+    """Tramos [inicio, fin] en segundos alrededor de cada HiLight; los que se
+    pisan se juntan en uno solo."""
+    segs = []
+    for m in sorted(marks_ms):
+        a = max(0.0, m / 1000.0 - before)
+        b = m / 1000.0 + after
+        if duration:
+            b = min(duration, b)
+        if b - a < 0.5:
+            continue
+        if segs and a <= segs[-1][1] + 0.5:
+            segs[-1][1] = max(segs[-1][1], b)
+        else:
+            segs.append([a, b])
+    return segs
+
+
+def hilight_export_job(src, marks_ms, before, after, mode, single_file, lang, out_dir=None):
+    """Exporta los momentos HiLight de un video: un archivo por momento o un
+    unico video resumen con todos, uno detras del otro."""
+    info = read_mp4_info(src)
+    duration = info.get("duration") or 0
+    segs = hilight_segments(marks_ms, before, after, duration)
+    total = sum(b - a for a, b in segs) or 1.0
+
+    def run(progress, cancel):
+        if not segs:
+            return False, tr(lang, "hl_none")
+        d = out_dir or share_dir()
+        os.makedirs(d, exist_ok=True)
+        base = os.path.splitext(os.path.basename(src))[0]
+        work = tempfile.mkdtemp(prefix="gpsync_hl_") if single_file else None
+        made, done_s = [], 0.0
+        try:
+            for i, (a, b) in enumerate(segs, 1):
+                if cancel():
+                    return False, "cancelled"
+                if single_file:
+                    out = os.path.join(work, f"part{i:03d}.mp4")
+                else:
+                    out = _unique_path(d, f"{base}_HiLight{i}_{_fmt_clip_time(a)}", ".mp4")
+                part = out + ".part.mp4"
+                args = ["-ss", f"{a:.3f}", "-i", src, "-t", f"{b - a:.3f}", "-map", "0:v:0", "-map", "0:a:0?"]
+                args += _clip_codec_args(mode) + ["-movflags", "+faststart", part]
+                base_s = done_s
+                ok, err = run_ffmpeg(args, b - a, lambda pct, s=base_s, L=b - a: progress(
+                    min(99.0, (s + L * pct / 100.0) / total * (90.0 if single_file else 100.0))), cancel)
+                if not ok or not os.path.exists(part):
+                    try:
+                        os.remove(part)
+                    except OSError:
+                        pass
+                    return False, err if err == "cancelled" else tr(lang, "ffmpeg_failed", e=err)
+                os.replace(part, out)
+                made.append(out)
+                done_s += b - a
+            if single_file:
+                final = _unique_path(d, f"{base}_HiLights", ".mp4")
+                lst = os.path.join(work, "lista.txt")
+                with open(lst, "w", encoding="utf-8") as f:
+                    for x in made:
+                        f.write("file '" + x.replace("\\", "/").replace("'", "'\\''") + "'\n")
+                part = final + ".part.mp4"
+                ok, err = run_ffmpeg(["-f", "concat", "-safe", "0", "-i", lst, "-c", "copy", "-movflags", "+faststart",
+                                      part], total, lambda pct: progress(90.0 + pct * 0.099), cancel)
+                if not ok or not os.path.exists(part):
+                    try:
+                        os.remove(part)
+                    except OSError:
+                        pass
+                    return False, err if err == "cancelled" else tr(lang, "ffmpeg_failed", e=err)
+                os.replace(part, final)
+                made = [final]
+            for x in made:
+                try:
+                    shutil.copystat(src, x)
+                    _copy_creation_time(src, x)
+                except Exception:
+                    pass
+        finally:
+            if work:
+                shutil.rmtree(work, ignore_errors=True)
+        note = tr(lang, "hl_done_one", name=os.path.basename(made[0])) if single_file or len(made) == 1 \
+            else tr(lang, "hl_done_many", n=len(made))
+        return True, {"output": made[0], "note": note}
+    return {"name": os.path.basename(src), "size": max(1, int(total * 1000)), "run": run}
+
+
 # ---- secuencias de fotos (time-lapse / rafaga) a video o GIF
 def _concat_list(frames):
     """Lista para el concat de ffmpeg. Cada foto se lee como un archivo

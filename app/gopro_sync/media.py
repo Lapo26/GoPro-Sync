@@ -586,7 +586,12 @@ def clean_gps(blocks, duration):
     ok = lambda f, d: d == 0 or d < 500
     min_fix = 3 if any(f >= 3 and ok(f, d) and pts for f, d, pts, *_ in blocks) else 2
     pts_out, speeds, kept_med, gap = [], [], None, 0
-    for f, d, pts, *_ in blocks:
+    # Para cada punto: en que parte del video esta (0..1) y su hora UTC (si
+    # el GPS la grabo). Sirven para sincronizar el grafico con el video y
+    # para exportar el recorrido a GPX con la hora real.
+    fracs, utcs = [], []
+    nblocks = len(blocks)
+    for bi, (f, d, pts, *rest) in enumerate(blocks):
         gap += 1
         if f < min_fix or not ok(f, d) or not pts:
             continue
@@ -600,6 +605,11 @@ def clean_gps(blocks, duration):
         if kept_med is not None and _haversine(med, kept_med) > 25 + 3 * max(v, 1.0) * gap * sec:
             continue                       # salto imposible: deriva del GPS
         kept_med, gap = med, 0
+        utc = rest[0] if rest else None
+        k = len(pts)
+        for j in range(k):
+            fracs.append((bi + j / k) / nblocks)
+            utcs.append((utc + j * sec / k) if utc else None)
         pts_out.extend(pts)
         speeds.append(v)
     if len(pts_out) < 2:
@@ -607,6 +617,8 @@ def clean_gps(blocks, duration):
     dist = sum(speeds) * sec
     alts = sorted(p[2] for p in pts_out)
     return {"points": pts_out,
+            "fracs": fracs,
+            "utcs": utcs,
             "dist": dist,
             # en un time-lapse cada muestra es un unico punto y un pico suelto
             # del GPS (340 km/h) arruinaba el maximo: se ignora el 0,5 % mas alto

@@ -37,11 +37,13 @@ from ..updates import UpdateCheckThread, UpdateDialog
 from ..ui.thumbs import set_thumb_cache_dir
 from ..ui.dialogs import BackupDialog, ConfirmQuitDialog, ImportConfirmDialog, JoinDialog, LanguageDialog, SequenceExportDialog
 from ..ui.gallery import PictureGallery, VideoGallery
+from ..ui.hilights import HiLightActionsMixin
+from ..ui.telemetry_panel import TrackExportMixin
 from ..ui.camera_page import CameraGalleryPage
 from ..ui.sync_tab import SyncTabWidget
 from ..ui.settings import OnboardingWizard, SettingsDialog
 
-class MainWindow(QWidget):
+class MainWindow(HiLightActionsMixin, TrackExportMixin, QWidget):
     def __init__(self):
         super().__init__()
         boot_step(10, "boot_ui")
