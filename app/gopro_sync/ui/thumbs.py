@@ -20,7 +20,9 @@ from ..ui.graphics import THUMB_H, THUMB_W, draw_play_badge, make_cover_thumbnai
 # Miniaturas de video: el primer cuadro con el ffmpeg incluido (el mismo que
 # usan unir/reparar). Antes se usaba OpenCV solo para esto: +140 MB en el
 # paquete y ~1 s para importarlo.
-_FFMPEG_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+# Prioridad normal a proposito: con BELOW_NORMAL, si la PC esta ocupada,
+# algunas miniaturas tardaban ~30 s en aparecer.
+_FFMPEG_FLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 DEFAULT_THUMB_CACHE_DIR = os.path.join(CONFIG_DIR, "thumb_cache")
@@ -53,6 +55,16 @@ def move_thumb_cache(old_dir, new_dir):
 # Un solo hilo lee del disco a la vez: en discos mecanicos (HDD), que las
 # fotos y los videos se lean en paralelo hace que el cabezal salte sin parar.
 _DISK_LOCK = threading.Lock()
+# Los videos NO usan ese candado: ffmpeg lee solo el indice y el primer cuadro
+# (~3 MB) y casi todo el tiempo es CPU y arrancar el proceso. Varios a la vez
+# dejan la galeria de videos mas rapida que antes con OpenCV de a uno, tambien
+# en disco mecanico, y no frenan a las fotos.
+_VIDEO_SLOTS = threading.Semaphore(4)
+
+
+def _gen_lock(kind):
+    """Candado para generar una miniatura nueva segun el tipo de archivo."""
+    return _VIDEO_SLOTS if kind == "video" else _DISK_LOCK
 
 
 def _trim_black_bars(img):
@@ -270,7 +282,7 @@ class ThumbnailLoaderThread(QThread):
             if self._stop_requested:
                 return
             try:
-                with _DISK_LOCK:
+                with _gen_lock(self.kind):
                     raw = self._load_raw(path)
                 self._emit(path, raw)
             except Exception:
@@ -282,16 +294,24 @@ class ThumbnailLoaderThread(QThread):
         exe = ffmpeg_exe()
         if not exe:
             return None
-        # Achicado en ffmpeg a 2x la cache (despues se recorta con calidad);
-        # -skip_frame nokey: decodifica solo cuadros clave, el primero lo es.
+        # Achicado en ffmpeg a 2x la cache (despues se recorta con calidad).
+        # Un hilo por proceso: corren varios a la vez (_VIDEO_SLOTS).
+        # Para que cada uno tarde ~30 % menos (probado con 377 videos de GoPro,
+        # imagen identica):
+        #   -skip_frame nokey: decodifica solo cuadros clave, el primero lo es
+        #   -skip_loop_filter all: sin filtro de desbloqueo
+        #   -probesize/-analyzeduration/-fpsprobesize minimos: no decodifica el
+        #    primer cuadro dos veces (una para analizar y otra para la imagen)
         scale = f"scale={self.CACHE_W * 2}:-2"
-        cmd = [exe, "-hide_banner", "-nostdin", "-v", "error", "-skip_frame", "nokey",
+        cmd = [exe, "-hide_banner", "-nostdin", "-v", "error", "-threads", "1", "-filter_threads", "1",
+               "-skip_frame", "nokey", "-skip_loop_filter", "all",
+               "-probesize", "32", "-analyzeduration", "0", "-fpsprobesize", "0",
                "-i", path, "-map", "0:v:0", "-frames:v", "1", "-vf", scale,
                "-f", "image2pipe", "-c:v", "bmp", "-"]
         try:
             out = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                 stdin=subprocess.DEVNULL, timeout=30,
-                                 startupinfo=_hidden_startupinfo(), creationflags=_FFMPEG_NO_WINDOW)
+                                 stdin=subprocess.DEVNULL, timeout=60,
+                                 startupinfo=_hidden_startupinfo(), creationflags=_FFMPEG_FLAGS)
         except Exception:
             return None
         if not out.stdout:
@@ -362,8 +382,8 @@ class _ThumbIO:
 
 class ThumbProvider(QObject):
     """Carga miniaturas bajo demanda en hilos: primero la cache (rapido); si no
-    esta, muestra la miniatura EXIF y genera la nitida (con _DISK_LOCK para no
-    castigar el disco mecanico)."""
+    esta, muestra la miniatura EXIF y genera la nitida (fotos de a una con
+    _DISK_LOCK para no castigar el disco mecanico; videos de a 4)."""
     ready = Signal(str, QImage)
 
     def __init__(self, kind, meta, lang, parent=None):
@@ -371,7 +391,9 @@ class ThumbProvider(QObject):
         from concurrent.futures import ThreadPoolExecutor
         self.io = _ThumbIO(kind, meta, lang)
         self.kind = kind
-        self.pool = ThreadPoolExecutor(max_workers=4)
+        # 6 hilos: hasta 4 pueden estar generando videos (_VIDEO_SLOTS) y los
+        # demas siguen sirviendo lo que ya esta en cache sin esperarlos.
+        self.pool = ThreadPoolExecutor(max_workers=6)
         self.inflight = set()
         self.generation = 0
         self.dpr = screen_dpr()
@@ -405,7 +427,10 @@ class ThumbProvider(QObject):
                 if gen != self.generation:
                     self.inflight.discard(path)
                     return
-                with _DISK_LOCK:
+                with _gen_lock(self.kind):
+                    if gen != self.generation:  # se scrolleo mientras esperaba turno
+                        self.inflight.discard(path)
+                        return
                     img = self.io._load_raw(path)   # genera y guarda en cache
             self.ready.emit(path, self._cover(img) if img is not None and not img.isNull() else QImage())
         except Exception:
