@@ -820,13 +820,8 @@ class MainWindow(HiLightActionsMixin, TrackExportMixin, QWidget):
         tray = getattr(self, "tray", None)
         if tray is not None and not getattr(self, "_really_quit", False) and self.config.get("autostart_enabled", False):
             event.ignore()
+            # Sin aviso de "sigue funcionando junto al reloj": el usuario no lo quiere.
             self.hide()
-            # El aviso sale una sola vez en total (antes, en cada arranque)
-            if not self.config.get("tray_hint_shown", False):
-                self.config["tray_hint_shown"] = True
-                save_config(self.config)
-                tray.showMessage("GoPro Sync", tr(self.lang, "tray_hidden_msg"),
-                                 QSystemTrayIcon.MessageIcon.Information, 5000)
             return
         if not getattr(self, "_quit_confirmed", False) and not self._stop_tasks_for_quit():
             event.ignore()
