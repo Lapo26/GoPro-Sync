@@ -511,27 +511,32 @@ def has_gps_fix(path, samples=24):
     return False
 
 
-_GPS_CACHE = None
-_GPS_CACHE_LOCK = None
+_FILE_CACHES = {}
+_FILE_CACHES_LOCK = None
 
 
-def gps_flags(paths, cache_file):
-    """{ruta: True/False} si cada video tiene GPS con senal. Guarda el
-    resultado en cache_file (por ruta, tamano y fecha) para no volver a
-    leer los videos cada vez que se abre la galeria."""
+def _cached_per_file(paths, cache_file, compute):
+    """{ruta: compute(ruta)} guardando cada resultado en cache_file (JSON, por
+    ruta, tamano y fecha): abrir la galeria de nuevo no vuelve a leer los
+    videos. El archivo se lee una sola vez por sesion y se escribe solo si hubo
+    algo nuevo. Si compute falla, el valor queda en None."""
     import json
     import threading
-    global _GPS_CACHE, _GPS_CACHE_LOCK
-    if _GPS_CACHE_LOCK is None:
-        _GPS_CACHE_LOCK = threading.Lock()
-    with _GPS_CACHE_LOCK:
-        if _GPS_CACHE is None:
+    global _FILE_CACHES_LOCK
+    if _FILE_CACHES_LOCK is None:
+        _FILE_CACHES_LOCK = threading.Lock()
+    with _FILE_CACHES_LOCK:
+        entry = _FILE_CACHES.get(cache_file)
+        if entry is None:
+            entry = _FILE_CACHES[cache_file] = {"data": None, "lock": threading.Lock()}
+    with entry["lock"]:
+        if entry["data"] is None:
             try:
                 with open(cache_file, encoding="utf-8") as fh:
-                    _GPS_CACHE = json.load(fh)
+                    entry["data"] = json.load(fh)
             except Exception:
-                _GPS_CACHE = {}
-        cache = _GPS_CACHE
+                entry["data"] = {}
+        cache = entry["data"]
         out, changed = {}, False
         for p in paths:
             try:
@@ -539,15 +544,16 @@ def gps_flags(paths, cache_file):
             except OSError:
                 continue
             key = f"{os.path.normcase(p)}|{st.st_size}|{int(st.st_mtime)}"
-            val = cache.get(key)
-            if val is None:
+            if key in cache:
+                val = cache[key]
+            else:
                 try:
-                    val = has_gps_fix(p)
+                    val = compute(p)
                 except Exception:
-                    val = False
+                    val = None
                 cache[key] = val
                 changed = True
-            out[p] = bool(val)
+            out[p] = val
         if changed:
             try:
                 tmp = cache_file + ".part"
@@ -557,6 +563,82 @@ def gps_flags(paths, cache_file):
             except Exception:
                 pass
         return out
+
+
+def gps_flags(paths, cache_file):
+    """{ruta: True/False} si cada video tiene GPS con senal. Guarda el
+    resultado en cache_file (por ruta, tamano y fecha) para no volver a
+    leer los videos cada vez que se abre la galeria."""
+    return {p: bool(v) for p, v in _cached_per_file(paths, cache_file, has_gps_fix).items()}
+
+
+def read_mp4_duration(path):
+    """Duracion en segundos leyendo SOLO la caja mvhd: se saltan las cajas
+    de arriba (ftyp, mdat de varios GB...) leyendo nada mas sus cabeceras y,
+    dentro de moov, se busca mvhd de la misma forma. Son 4-6 lecturas de
+    unos pocos bytes por video, sin cargar el indice (moov, varios MB en la
+    GoPro) ni abrir un decodificador. None si no se puede leer."""
+    with open(path, "rb") as f:
+        fsize = os.fstat(f.fileno()).st_size
+
+        def header(pos, end):
+            f.seek(pos)
+            h = f.read(16)
+            if len(h) < 8:
+                return None
+            size, typ, hdr = struct.unpack(">I", h[:4])[0], h[4:8], 8
+            if size == 1:
+                if len(h) < 16:
+                    return None
+                size, hdr = struct.unpack(">Q", h[8:16])[0], 16
+            elif size == 0:
+                size = end - pos
+            if size < hdr:
+                return None
+            return size, typ, hdr
+
+        pos = 0
+        while pos + 8 <= fsize:
+            box = header(pos, fsize)
+            if box is None:
+                return None
+            size, typ, hdr = box
+            if typ == b"moov":
+                end = min(pos + size, fsize)
+                cpos = pos + hdr
+                while cpos + 8 <= end:
+                    child = header(cpos, end)
+                    if child is None:
+                        return None
+                    csize, ctyp, chdr = child
+                    if ctyp == b"mvhd":
+                        f.seek(cpos + chdr)
+                        body = f.read(32)
+                        if len(body) < 20:
+                            return None
+                        if body[0] == 1:
+                            if len(body) < 32:
+                                return None
+                            ts, dur = struct.unpack(">IQ", body[20:32])
+                        else:
+                            ts, dur = struct.unpack(">II", body[12:20])
+                        return dur / ts if ts and dur else None
+                    cpos += csize
+                return None
+            pos += size
+    return None
+
+
+def video_durations(paths, cache_file):
+    """{ruta: segundos o None} con cache en disco (ver _cached_per_file)."""
+    return _cached_per_file(paths, cache_file, read_mp4_duration)
+
+
+def format_duration(seconds):
+    """1:05 / 12:30 / 1:02:03 (como en YouTube)."""
+    s = int(round(seconds))
+    h, m, s = s // 3600, s // 60 % 60, s % 60
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
 
 
 def _haversine(a, b):

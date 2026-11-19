@@ -8,7 +8,7 @@ from PySide6.QtWidgets import QFrame, QApplication, QDateEdit, QDialog, QHBoxLay
 from ..i18n import _human_size, short_path, tr
 from ..winshell import move_to_recycle_bin, show_in_explorer
 from ..sound import SoundManager
-from ..media import gps_flags, is_broken_mp4
+from ..media import format_duration, gps_flags, is_broken_mp4, video_durations
 from ..env import CONFIG_DIR
 from ..workers import ScanThread
 from ..videotools import chapter_group_of, find_chapter_groups
@@ -639,10 +639,42 @@ class VideoGallery(GalleryBase):
 
     def refresh(self, *a, **k):
         r = super().refresh(*a, **k)
+        self._update_durations()
         self._update_chapter_marks()
         self._update_gps_marks()
         self.refresh_hilight_marks()
         return r
+
+    # Duracion abajo a la derecha de cada miniatura. Rendimiento: se lee solo
+    # la caja mvhd de cada video (unos bytes, ver read_mp4_duration), en un
+    # hilo aparte y por tandas en el orden de la grilla (primero lo que se ve
+    # arriba); queda en cache en disco, asi que la proxima vez es instantaneo.
+    # El texto se arma aca una vez: al pintar solo se busca en un diccionario.
+    _DUR_FIRST_BATCH, _DUR_BATCH = 48, 400
+
+    def _update_durations(self):
+        self._dur_gen = getattr(self, "_dur_gen", 0) + 1
+        files = list(self.view.files)
+        self._next_duration_batch(self._dur_gen, files, 0)
+
+    def _next_duration_batch(self, gen, files, start):
+        if gen != self._dur_gen or start >= len(files):
+            return
+        n = self._DUR_FIRST_BATCH if start == 0 else self._DUR_BATCH
+        cache = os.path.join(CONFIG_DIR, "duration_cache.json")
+        th = ScanThread(gen, video_durations, files[start:start + n], cache)
+        th.done.connect(lambda t, d: self._apply_durations(t, d, files, start + n))
+        self._dur_thread = th
+        th.start()
+
+    def _apply_durations(self, gen, durations, files, next_start):
+        if gen != self._dur_gen:
+            return                       # la galeria se recargo mientras tanto
+        for p, secs in (durations or {}).items():
+            if secs:
+                self.view.durations[p] = format_duration(secs)
+        self.view.viewport().update()
+        self._next_duration_batch(gen, files, next_start)
 
     def _update_gps_marks(self):
         """Mapita en los videos con GPS. Se calcula en segundo plano y queda

@@ -3,6 +3,11 @@ TRANSLATIONS al final de i18n.py."""
 
 EXTRA_TEXTS = {
     "es": {
+        "player_mute": "Silenciar   (S)",
+        "player_unmute": "Activar el sonido   (S)",
+        "player_volume_label": "Volumen inicial del reproductor de video",
+        "player_start_muted": "Abrir los videos silenciados",
+        "player_audio_hint": "Así empieza cada video. En el reproductor lo podés cambiar en el momento (botón del parlante, tecla S, flechas arriba y abajo) sin tocar este valor.",
         "moments_btn": "Momentos HiLight",
         "moments_keys": "H: siguiente · Mayús+H: anterior · M: marcar este momento",
         "moments_none": "Este video no tiene momentos HiLight",
@@ -67,6 +72,11 @@ EXTRA_TEXTS = {
         "ov_time": "Hora",
     },
     "en": {
+        "player_mute": "Mute   (S)",
+        "player_unmute": "Unmute   (S)",
+        "player_volume_label": "Video player starting volume",
+        "player_start_muted": "Open videos muted",
+        "player_audio_hint": "What every video starts with. In the player you can change it on the fly (speaker button, S key, up and down arrows) without touching this value.",
         "moments_btn": "HiLight moments",
         "moments_keys": "H: next · Shift+H: previous · M: mark this moment",
         "moments_none": "This video has no HiLight moments",
@@ -131,6 +141,11 @@ EXTRA_TEXTS = {
         "ov_time": "Time",
     },
     "de": {
+        "player_mute": "Stummschalten   (S)",
+        "player_unmute": "Ton einschalten   (S)",
+        "player_volume_label": "Startlautstärke des Videoplayers",
+        "player_start_muted": "Videos stumm öffnen",
+        "player_audio_hint": "Damit startet jedes Video. Im Player lässt es sich jederzeit ändern (Lautsprecher-Knopf, Taste S, Pfeiltasten hoch und runter), ohne diesen Wert zu ändern.",
         "moments_btn": "HiLight-Momente",
         "moments_keys": "H: nächster · Umschalt+H: vorheriger · M: diesen Moment markieren",
         "moments_none": "Dieses Video hat keine HiLight-Momente",

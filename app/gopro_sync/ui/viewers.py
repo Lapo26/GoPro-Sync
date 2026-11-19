@@ -6,7 +6,7 @@ from PySide6.QtMultimedia import QAudioOutput, QMediaMetaData, QMediaPlayer, QVi
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (QDialog, QGraphicsScene, QGraphicsView, QHBoxLayout, QLabel, QPushButton, QSlider,
                                QSplitter, QStackedWidget, QStyle, QStyleOptionSlider, QVBoxLayout, QWidget)
-from ..env import FONT_STACK
+from ..env import FONT_STACK, load_config
 from ..i18n import tr
 from ..sound import SoundManager
 from ..media import _read_moov, read_gopro_track
@@ -40,6 +40,28 @@ def toggle_fullscreen(window):
         window.showNormal()
     else:
         window.showFullScreen()
+
+
+def _player_audio_defaults(parent):
+    """(volumen 0-100, silenciado) por defecto del reproductor, de Ajustes.
+    Usa la configuracion ya cargada en la ventana principal; si no la
+    encuentra, la lee del disco."""
+    cfg, w = None, parent
+    while w is not None:
+        if isinstance(getattr(w, "config", None), dict):
+            cfg = w.config
+            break
+        w = w.parent()
+    if cfg is None:
+        try:
+            cfg = load_config()
+        except Exception:
+            cfg = {}
+    try:
+        vol = int(cfg.get("player_volume", 80))
+    except (TypeError, ValueError):
+        vol = 80
+    return max(0, min(100, vol)), bool(cfg.get("player_start_muted", False))
 
 
 class VideoPlayerDialog(QDialog):
@@ -151,14 +173,19 @@ class VideoPlayerDialog(QDialog):
         self._seek_timer.timeout.connect(lambda: self._do_seek(self._seek_target))
         c_layout.addWidget(self.slider_seek, 1)
 
-        vol_icon = QLabel()
-        vol_icon.setPixmap(emoji_icon("🔊", 18).pixmap(18, 18))
-        vol_icon.setStyleSheet("background: transparent;")
-        c_layout.addWidget(vol_icon)
+        # Volumen y silencio: arrancan con lo elegido en Ajustes > Sonidos.
+        # Lo que se cambie aca vale para esta ventana (tambien al pasar al
+        # video siguiente) y no toca el valor por defecto.
+        vol, muted = _player_audio_defaults(parent)
+        self.btn_mute = _round_btn("🔊", tr(self.lang, "player_mute"))
+        self.btn_mute.setCheckable(True)
+        self.btn_mute.clicked.connect(self.toggle_mute)
+        c_layout.addWidget(self.btn_mute)
         self.slider_volume = QSlider(Qt.Orientation.Horizontal)
         self.slider_volume.setFixedWidth(110)
         self.slider_volume.setRange(0, 100)
-        self.slider_volume.setValue(80)
+        self.slider_volume.setValue(vol)
+        self.slider_volume.setFocusPolicy(Qt.FocusPolicy.NoFocus)   # las flechas siguen siendo del reproductor
         self.slider_volume.valueChanged.connect(self.on_volume)
         c_layout.addWidget(self.slider_volume)
 
@@ -225,8 +252,9 @@ class VideoPlayerDialog(QDialog):
 
         self.player = QMediaPlayer(self)
         self.audio = QAudioOutput(self)
-        self.audio.setVolume(0.8)
+        self.audio.setVolume(vol / 100.0)
         self.player.setAudioOutput(self.audio)
+        self.set_muted(muted)
 
         self.pan_sink = QVideoSink(self)
         self.pan_sink.videoFrameChanged.connect(self._on_pan_frame)
@@ -576,6 +604,28 @@ class VideoPlayerDialog(QDialog):
 
     def on_volume(self, value):
         self.audio.setVolume(value / 100.0)
+        # Subir el volumen con el control saca el silencio (como en YouTube)
+        if value > 0 and self.audio.isMuted():
+            self.set_muted(False)
+        else:
+            self._update_mute_icon()
+
+    def set_muted(self, muted):
+        self.audio.setMuted(bool(muted))
+        self._update_mute_icon()
+
+    def toggle_mute(self):
+        SoundManager.play_click()
+        self.set_muted(not self.audio.isMuted())
+
+    def _update_mute_icon(self):
+        silent = self.audio.isMuted() or self.slider_volume.value() == 0
+        self.btn_mute.setChecked(self.audio.isMuted())
+        self.btn_mute.setIcon(QIcon(emoji_icon("🔇" if silent else "🔊", 18)))
+        self.btn_mute.setToolTip(tr(self.lang, "player_unmute" if self.audio.isMuted() else "player_mute"))
+
+    def _change_volume(self, delta):
+        self.slider_volume.setValue(max(0, min(100, self.slider_volume.value() + delta)))
 
     def on_position_changed(self, pos):
         if self._clip_stop_at is not None and pos >= self._clip_stop_at:
@@ -608,6 +658,10 @@ class VideoPlayerDialog(QDialog):
             self.mark_in()
         elif event.key() == Qt.Key.Key_O:
             self.mark_out()
+        elif event.key() == Qt.Key.Key_S:
+            self.toggle_mute()
+        elif event.key() in (Qt.Key.Key_Up, Qt.Key.Key_Down):
+            self._change_volume(5 if event.key() == Qt.Key.Key_Up else -5)   # flechas arriba/abajo: volumen
         elif event.key() in (Qt.Key.Key_Left, Qt.Key.Key_Right) and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
             self.step_media(1 if event.key() == Qt.Key.Key_Right else -1)
         elif event.key() in (Qt.Key.Key_Left, Qt.Key.Key_Right):

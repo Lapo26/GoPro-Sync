@@ -223,6 +223,8 @@ DEFAULT_CONFIG = {
     "backup_after_sync": True,  # Respaldar automaticamente al terminar cada sincronizacion
     "ui_sound_volume": 70,    # 0-100, Lautstaerke fuer Boot/Klick/Fertig-Sounds
     "ui_sounds_muted": False,
+    "player_volume": 80,          # 0-100, volumen con el que arranca el reproductor de video
+    "player_start_muted": False,  # el reproductor arranca silenciado
     "profile_name": "",
     "profile_picture": "",
     "onboarding_done": False,

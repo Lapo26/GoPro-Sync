@@ -497,6 +497,9 @@ class ThumbGridView(QAbstractScrollArea):
         self._gps_icon = None
         # Videos con momentos HiLight: ruta -> cantidad (etiqueta amarilla arriba a la izquierda)
         self.hilights = {}
+        # Videos: ruta -> duracion ya formateada ("1:05"), abajo a la derecha
+        self.durations = {}
+        self._dur_font = None
         self.accent = QColor("#00f2fe")
         self.header_font = QFont("Century Gothic")
         self.header_font.setPixelSize(13)
@@ -729,6 +732,11 @@ class ThumbGridView(QAbstractScrollArea):
                     painter.save()
                     self._paint_sequence(painter, r, clip, sel, *sq)
                     painter.restore()
+                dur = self.durations.get(path)
+                if dur:
+                    painter.save()
+                    self._paint_duration(painter, r, dur)
+                    painter.restore()
                 fr = self.seq_frames.get(path)
                 if fr:
                     painter.save()
@@ -818,6 +826,21 @@ class ThumbGridView(QAbstractScrollArea):
         painter.fillPath(star, QColor("#0d0d12"))
         painter.setPen(QColor("#0d0d12"))
         painter.drawText(QRectF(pill.left() + 22, pill.top(), w - 26, pill.height()), Qt.AlignmentFlag.AlignCenter, text)
+
+    def _paint_duration(self, painter, r, text):
+        """Duracion del video ("1:05") abajo a la derecha, sobre fondo oscuro."""
+        if self._dur_font is None:
+            self._dur_font = QFont(self.header_font)
+            self._dur_font.setPixelSize(11)
+            self._dur_font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 0.5)
+        painter.setFont(self._dur_font)
+        w = painter.fontMetrics().horizontalAdvance(text) + 14
+        pill = QRectF(r.right() - w - 8, r.bottom() - 28, w, 20)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(0, 0, 0, 170))
+        painter.drawRoundedRect(pill, 6, 6)
+        painter.setPen(QColor(255, 255, 255, 235))
+        painter.drawText(pill, Qt.AlignmentFlag.AlignCenter, text)
 
     def _paint_gps(self, painter, r):
         """Mapita: el video tiene recorrido GPS (se ve en el reproductor)."""

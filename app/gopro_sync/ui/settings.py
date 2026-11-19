@@ -667,6 +667,36 @@ class SettingsDialog(QDialog):
         self.chk_mute.setChecked(self.config.get("ui_sounds_muted", False), animate=False)
         self.chk_mute.toggled.connect(self.on_mute_toggle)
         sounds_layout.addWidget(self.chk_mute)
+
+        # ---- Reproductor de video: volumen y silencio con que arranca
+        divider_player = QFrame()
+        divider_player.setFixedHeight(1)
+        divider_player.setStyleSheet("background-color: rgba(255,255,255,0.08); border: none; margin-top: 6px; margin-bottom: 6px;")
+        sounds_layout.addWidget(divider_player)
+        pvol_row = QHBoxLayout()
+        pvol_title = QLabel(tr(self.lang, "player_volume_label"))
+        pvol_title.setStyleSheet("font-size: 14px; font-weight: bold;")
+        pvol_row.addWidget(pvol_title)
+        pvol_row.addStretch()
+        self.lbl_player_volume = QLabel(f"{int(config.get('player_volume', 80))}%")
+        self.lbl_player_volume.setStyleSheet("color: #ccc; font-size: 12px;")
+        pvol_row.addWidget(self.lbl_player_volume)
+        sounds_layout.addLayout(pvol_row)
+        self.slider_player_volume = QSlider(Qt.Orientation.Horizontal)
+        self.slider_player_volume.setRange(0, 100)
+        self.slider_player_volume.setValue(int(config.get("player_volume", 80)))
+        self.slider_player_volume.valueChanged.connect(self.on_player_volume_changed)
+        self.slider_player_volume.sliderReleased.connect(self._save_player_volume)
+        sounds_layout.addWidget(self.slider_player_volume)
+        self.chk_player_muted = ToggleSwitch(tr(self.lang, "player_start_muted"))
+        self.chk_player_muted.set_accent(self.config.get("accent_color", "#00f2fe"))
+        self.chk_player_muted.setChecked(self.config.get("player_start_muted", False), animate=False)
+        self.chk_player_muted.toggled.connect(self.on_player_muted_toggle)
+        sounds_layout.addWidget(self.chk_player_muted)
+        player_hint = QLabel(tr(self.lang, "player_audio_hint"))
+        player_hint.setStyleSheet("color: #777; font-size: 11px;")
+        player_hint.setWordWrap(True)
+        sounds_layout.addWidget(player_hint)
         sounds_layout.addStretch()
 
         # ============ Tab: System (Autostart + Sprache) ============
@@ -880,6 +910,19 @@ class SettingsDialog(QDialog):
 
     def on_volume_slider_released(self):
         SoundManager.play_click()
+
+    def on_player_volume_changed(self, value):
+        self.config["player_volume"] = value
+        self.lbl_player_volume.setText(f"{value}%")
+        if not self.slider_player_volume.isSliderDown():
+            self._save_player_volume()      # teclado / clic: guardar ya; arrastrando: al soltar
+
+    def _save_player_volume(self):
+        save_config(self.config)
+
+    def on_player_muted_toggle(self, state):
+        self.config["player_start_muted"] = bool(state)
+        save_config(self.config)
 
     def on_mute_toggle(self, state):
         muted = bool(state)
