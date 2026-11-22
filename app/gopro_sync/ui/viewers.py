@@ -64,6 +64,51 @@ def _player_audio_defaults(parent):
     return max(0, min(100, vol)), bool(cfg.get("player_start_muted", False))
 
 
+class _BusyRing(QWidget):
+    """Arco que gira alrededor de un boton redondo mientras algo carga (por
+    ejemplo el GPS del video, que en videos largos tarda unos segundos)."""
+
+    def __init__(self, button, color="#00f2fe"):
+        super().__init__(button)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
+        self._angle = 0
+        self._color = QColor(color)
+        self._timer = QTimer(self)
+        self._timer.setInterval(33)
+        self._timer.timeout.connect(self._tick)
+        self.hide()
+
+    def start(self):
+        self.setGeometry(self.parentWidget().rect())
+        self.raise_()
+        self.show()
+        self._timer.start()
+
+    def stop(self):
+        self._timer.stop()
+        self.hide()
+
+    def is_running(self):
+        return self._timer.isActive()
+
+    def _tick(self):
+        self._angle = (self._angle + 12) % 360
+        self.update()
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        r = QRectF(self.rect()).adjusted(2, 2, -2, -2)
+        p.setPen(QPen(QColor(255, 255, 255, 45), 2.5))
+        p.drawEllipse(r)
+        pen = QPen(self._color, 2.5)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        p.setPen(pen)
+        p.drawArc(r, -self._angle * 16, 100 * 16)
+        p.end()
+
+
 class VideoPlayerDialog(QDialog):
     """Eigener Video-Player mit richtiger Steuerleiste (Play/Pause, Zeit-
     Anzeige, Sucher-Slider, Lautstaerke) - oeffnet sich beim Anklicken eines
@@ -210,6 +255,8 @@ class VideoPlayerDialog(QDialog):
         self.btn_map.setEnabled(False)
         self.btn_map.clicked.connect(self.toggle_map)
         c_layout.addWidget(self.btn_map)
+        # Mientras se lee el GPS (en videos largos tarda) gira un aro sobre el boton
+        self._gps_ring = _BusyRing(self.btn_map)
 
         self.btn_full = _round_btn("📷", tr(self.lang, "fullscreen_toggle"))
         self.btn_full.setIcon(fullscreen_icon())
@@ -299,6 +346,7 @@ class VideoPlayerDialog(QDialog):
         gps = ScanThread(gen, read_gopro_track, path)
         gps.done.connect(self._on_track)
         gps.start()
+        self._gps_ring.start()
 
     # ---- anterior / siguiente
     def step_media(self, delta):
@@ -450,6 +498,7 @@ class VideoPlayerDialog(QDialog):
     def _on_track(self, token, track):
         if token != self._load_gen:
             return                       # llego tarde: es del video anterior
+        self._gps_ring.stop()
         if track and track.get("points"):
             self._track = track
             self.btn_map.setEnabled(True)
