@@ -11,6 +11,12 @@ import sys
 # Permite ejecutar "python app/main.py" desde cualquier carpeta
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+if __name__ == "__main__" and "--gps-index" in sys.argv:
+    # Proceso de fondo del mapa global: lee el GPS de la biblioteca y lo
+    # guarda en el indice. Sin ventana ni bandeja (no pasa por la app).
+    from gopro_sync.gps_index import worker_main
+    sys.exit(worker_main(sys.argv))
+
 from gopro_sync.app import main, run_selftest  # noqa: E402
 
 if __name__ == "__main__":

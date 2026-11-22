@@ -9,7 +9,8 @@ from PySide6.QtWidgets import (QDialog, QGraphicsScene, QGraphicsView, QHBoxLayo
 from ..env import FONT_STACK, load_config, save_config
 from ..i18n import tr
 from ..sound import SoundManager
-from ..media import _read_moov, read_gopro_track
+from ..gps_index import fast_track
+from ..media import _read_moov
 from ..workers import ScanThread
 from ..ui.graphics import crossed_emoji_icon, emoji_icon
 from ..ui.widgets import VideoFrameView, save_captured_photo, show_toast
@@ -423,7 +424,7 @@ class VideoPlayerDialog(QDialog):
         th = ScanThread(gen, lambda: _read_moov(path))
         th.done.connect(lambda t, _r: self._open_media() if t == self._load_gen else None)
         th.start()
-        gps = ScanThread(gen, read_gopro_track, path)
+        gps = ScanThread(gen, fast_track, path)        # del indice si ya esta (al instante)
         gps.done.connect(self._on_track)
         gps.start()
         self._gps_ring.start()

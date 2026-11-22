@@ -9,7 +9,8 @@ from PySide6.QtGui import QAction, QActionGroup, QColor, QDesktopServices, QImag
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QMenu, QPushButton, QToolButton, QVBoxLayout, QWidget
 from ..env import CACHE_DIR, FONT_STACK, load_config
 from ..i18n import tr
-from ..media import cumulative_distance, read_gopro_track, read_mp4_info
+from ..gps_index import fast_track
+from ..media import cumulative_distance, read_mp4_info
 from ..workers import ScanThread
 from ..version import APP_VERSION
 
@@ -122,12 +123,16 @@ class TileMapWidget(QWidget):
       llegar una tesela solo se rehace la de teselas; el recorrido se
       recorta a lo que se ve y solo se rehace si cambia la vista.
     - Al arrastrar o hacer zoom se muestran las capas que ya estan, movidas
-      o ampliadas (instantaneo), y se rehacen como mucho cada ~120 ms."""
+      o ampliadas (instantaneo), y se rehacen como mucho cada ~120 ms.
+    - La capa de teselas cubre algo mas que la vista: al arrastrar se reusa
+      hasta salir de ese margen. Y una tesela que llega se pega sola sobre la
+      capa ya armada, sin volver a pegar todas."""
     tile_data = Signal(str, bytes)      # tesela, contenido (vacio si no se consiguio)
     MAX_TILES = 320                     # teselas en memoria (~80 MB); el resto queda en disco
     RENDER_EVERY_MS = 120               # mientras se mueve el mapa, rehacer capas cada tanto
     DECODE_BUDGET_S = 0.006             # tiempo por tanda de decodificacion en la ventana
     FIT_MARGIN = 28                 # px libres alrededor del recorrido al encuadrar
+    TILE_MARGIN = 1.25              # la capa de teselas cubre algo mas que la vista
 
     def __init__(self, points, accent, parent=None, elapsed=None, lang="es", cum=None):
         super().__init__(parent)
@@ -358,8 +363,10 @@ class TileMapWidget(QWidget):
 
     def _tile_path(self, layer, z, x, y):
         # el mapa de OpenStreetMap sigue en la carpeta de siempre (teselas ya guardadas)
-        base = self.cache_dir if layer == "osm" else os.path.join(self.cache_dir, layer)
-        return os.path.join(base, str(z), str(x), f"{y}.{MAP_LAYERS[layer]['ext']}")
+        # (armada a mano: os.path.join miles de veces por capa se notaba)
+        base = self.cache_dir if layer == "osm" else self.cache_dir + os.sep + layer
+        sep = os.sep
+        return f"{base}{sep}{z}{sep}{x}{sep}{y}.{MAP_LAYERS[layer]['ext']}"
 
     def _cached_tile(self, z, x, y):
         """Tesela que ya esta en memoria (no lee el disco ni descarga)."""
@@ -440,7 +447,7 @@ class TileMapWidget(QWidget):
         """Decodifica teselas en la ventana, pocas por vez: entre tanda y
         tanda la ventana atiende al usuario."""
         t0 = time.perf_counter()
-        got = False
+        got = []
         while self._decode_queue and time.perf_counter() - t0 < self.DECODE_BUDGET_S:
             key, data = self._decode_queue.popleft()
             self.pending.discard(key)
@@ -451,12 +458,12 @@ class TileMapWidget(QWidget):
                 self._failed[key] = time.monotonic()
                 continue
             self.tiles[key] = img.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
-            got = True
+            got.append(key)
         while len(self.tiles) > self.MAX_TILES:
             self.tiles.popitem(last=False)
         if self._decode_queue:
             self._decode_timer.start()
-        if got:
+        if got and not self._paint_new_tiles(got):
             self._tiles_dirty = True
             self._schedule_render()
 
@@ -467,8 +474,7 @@ class TileMapWidget(QWidget):
 
     def paintEvent(self, event):
         view = self._view()
-        if (self._tiles_dirty or self._tiles_layer is None or self._tiles_layer[1] != view
-                or self._route_layer is None or self._route_layer[1] != view):
+        if not self._tiles_layer_ok(view) or not self._route_layer_ok(view):
             self._schedule_render()
         painter = QPainter(self)
         painter.fillRect(self.rect(), QColor("#20232e"))
@@ -518,12 +524,101 @@ class TileMapWidget(QWidget):
         if view[4] <= 0 or view[5] <= 0:
             return
         self._last_render = time.perf_counter()
-        if self._tiles_dirty or self._tiles_layer is None or self._tiles_layer[1] != view:
-            self._tiles_dirty = False
-            self._tiles_layer = (self._render_tiles(view), view)
-        if self._route_layer is None or self._route_layer[1] != view:
-            self._route_layer = (self._render_route(view), view)
+        self._ensure_tiles_layer(view)
+        if not self._route_layer_ok(view):
+            self._route_layer = self._make_route_layer(view)
         self.update()
+
+    @staticmethod
+    def _covers(lv, view):
+        """La capa dibujada con la vista lv alcanza para mostrar view (mismo
+        zoom, escala y mapa de fondo; view queda adentro)."""
+        if lv[0] != view[0] or lv[1] != view[1] or lv[6] != view[6] or lv[7] != view[7]:
+            return False
+        lz, ls, lcx, lcy, lw, lh = lv[:6]
+        z, s, cx, cy, w, h = view[:6]
+        return (lcx - lw / ls / 2 <= cx - w / s / 2 + 0.5 and lcy - lh / ls / 2 <= cy - h / s / 2 + 0.5
+                and cx + w / s / 2 <= lcx + lw / ls / 2 + 0.5 and cy + h / s / 2 <= lcy + lh / ls / 2 + 0.5)
+
+    def _ext_view(self, view, margin):
+        z, s, cx, cy, w, h, dpr, layer = view
+        return (z, s, cx, cy, int(w * margin), int(h * margin), dpr, layer)
+
+    def _tiles_layer_ok(self, view):
+        return (not self._tiles_dirty and self._tiles_layer is not None
+                and self._covers(self._tiles_layer[1], view))
+
+    def _ensure_tiles_layer(self, view):
+        if not self._tiles_layer_ok(view):
+            self._tiles_dirty = False
+            ext = self._ext_view(view, self.TILE_MARGIN)
+            self._tiles_layer = (self._render_tiles(ext), ext)
+
+    def _paint_new_tiles(self, keys):
+        """Pega en la capa ya armada las teselas recien llegadas del nivel que
+        se esta mostrando. False si hace falta rehacer la capa entera (llego
+        una de otro nivel, o la de este nivel se amplia)."""
+        if self._tiles_layer is None or self._tiles_dirty:
+            return False
+        img, lv = self._tiles_layer
+        z, s, cx, cy, w, h, dpr, layer = lv
+        info = MAP_LAYERS[layer]
+        lz = z + info.get("detail", 0)
+        tz = min(lz, info["max"])
+        if tz != lz:
+            return False
+        ts = 256 / (1 << (lz - z))
+        vw, vh = w / s, h / s
+        left, top = cx - vw / 2, cy - vh / 2
+        n = 2 ** lz
+        tx0, tx1 = int(math.floor(left / ts)), int(math.floor((left + vw) / ts))
+        ty0, ty1 = max(0, int(math.floor(top / ts))), min(n - 1, int(math.floor((top + vh) / ts)))
+        todo = []                              # (destino, tesela, origen, suavizar)
+        for key in keys:
+            try:
+                lname, kz, kx, ky = key.split("/")
+                kz, kx, ky = int(kz), int(kx), int(ky)
+            except ValueError:
+                return False
+            if lname != layer:
+                continue
+            tile = self.tiles.get(key)
+            if tile is None:
+                continue
+            d = tz - kz
+            if d < 0 or d > 6:
+                return False
+            k = 1 << d
+            sub = tile.width() / k
+            # la tesela puede verse repetida a la izquierda/derecha del mundo;
+            # una de menos zoom (vista previa) cubre k x k teselas buenas y solo
+            # se pega donde la buena todavia no esta en memoria
+            for tx in range(tx0, tx1 + 1):
+                wx = tx % n
+                if wx >> d != kx:
+                    continue
+                for ty in range(max(ty0, ky * k), min(ty1, ky * k + k - 1) + 1):
+                    if d and self.tiles.get(f"{layer}/{tz}/{wx}/{ty}") is not None:
+                        continue
+                    todo.append((QRectF(tx * ts - left, ty * ts - top, ts, ts), tile,
+                                 QRectF((wx % k) * sub, (ty % k) * sub, sub, sub), d == 0))
+        if todo:
+            ov = 1.0 / s
+            p = QPainter(img)
+            p.scale(s, s)
+            for dst, tile, src, smooth in todo:
+                p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, smooth)
+                p.drawImage(dst.adjusted(0, 0, ov, ov), tile, src)
+            p.end()
+            self.update()
+        return True
+
+    def _route_layer_ok(self, view):
+        """La capa del recorrido ya dibujada sirve para esta vista."""
+        return self._route_layer is not None and self._route_layer[1] == view
+
+    def _make_route_layer(self, view):
+        return self._render_route(view), view
 
     def _new_layer(self, view, fill=None):
         z, s, cx, cy, w, h, dpr, layer = view
@@ -566,6 +661,8 @@ class TileMapWidget(QWidget):
                 if tile is not None:
                     k = 1 << d
                     sub = tile.width() / k
+                    # la vista previa ampliada es momentanea: sin suavizado (mucho mas rapido)
+                    p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, d == d0)
                     p.drawImage(QRectF(tx * ts - left, ty * ts - top, ts + ov, ts + ov), tile,
                                 QRectF((wx % k) * sub, (ty % k) * sub, sub, sub))
         p.end()
@@ -823,7 +920,7 @@ class GpsMapDialog(QDialog):
         foot.addWidget(self.btn_osm)
         foot.addWidget(close)
         self.lay.addLayout(foot)
-        th = ScanThread(0, read_gopro_track, path)
+        th = ScanThread(0, fast_track, path)
         th.done.connect(self._on_points)
         th.start()
 

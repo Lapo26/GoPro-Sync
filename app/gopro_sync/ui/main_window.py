@@ -42,6 +42,7 @@ from ..ui.telemetry_panel import TrackExportMixin
 from ..ui.camera_page import CameraGalleryPage
 from ..ui.sync_tab import SyncTabWidget
 from ..ui.settings import OnboardingWizard, SettingsDialog
+from ..ui.global_map import GlobalMapPage
 
 class MainWindow(HiLightActionsMixin, TrackExportMixin, QWidget):
     def __init__(self):
@@ -196,9 +197,14 @@ class MainWindow(HiLightActionsMixin, TrackExportMixin, QWidget):
         set_nav_text(self.btn_nav_pictures, self.lang, "nav_pictures")
         self.btn_nav_pictures.setCheckable(True)
 
+        self.btn_nav_map = QPushButton("")
+        set_nav_text(self.btn_nav_map, self.lang, "nav_map")
+        self.btn_nav_map.setCheckable(True)
+
         sidebar_layout.addWidget(self.btn_nav_sync)
         sidebar_layout.addWidget(self.btn_nav_videos)
         sidebar_layout.addWidget(self.btn_nav_pictures)
+        sidebar_layout.addWidget(self.btn_nav_map)
         self.btn_nav_activity = ActivityNavButton("")
         set_nav_text(self.btn_nav_activity, self.lang, "nav_activity")
         self.btn_nav_activity.setCheckable(True)
@@ -259,6 +265,9 @@ class MainWindow(HiLightActionsMixin, TrackExportMixin, QWidget):
         self.camera_page = CameraGalleryPage(self.lang, self.config.get("accent_color", "#00f2fe"),
                                              lambda: self.sync_page.sync_target_dir)
         self.CAMERA_INDEX = self.pages.addWidget(self.camera_page)
+        # Mapa global: no carga nada hasta que se abre (el indice se llena en otro proceso)
+        self.map_page = GlobalMapPage(lambda: self.sync_page.sync_target_dir, self.get_current_theme_color, self.lang)
+        self.MAP_INDEX = self.pages.addWidget(self.map_page)
         self.sync_page.camera_files_requested.connect(self.show_camera_files)
         self.camera_page.back_requested.connect(lambda: self.switch_page(0, self.btn_nav_sync))
         self.camera_page.sync_requested.connect(self._sync_camera_selection)
@@ -288,6 +297,7 @@ class MainWindow(HiLightActionsMixin, TrackExportMixin, QWidget):
         self.btn_nav_sync.clicked.connect(lambda: self.switch_page(0, self.btn_nav_sync))
         self.btn_nav_videos.clicked.connect(lambda: self.switch_page(1, self.btn_nav_videos))
         self.btn_nav_pictures.clicked.connect(lambda: self.switch_page(2, self.btn_nav_pictures))
+        self.btn_nav_map.clicked.connect(lambda: self.switch_page(self.MAP_INDEX, self.btn_nav_map))
         self.btn_nav_activity.clicked.connect(self.show_activity)
 
         main_layout.addWidget(self.sidebar)
@@ -424,10 +434,14 @@ class MainWindow(HiLightActionsMixin, TrackExportMixin, QWidget):
         self.pictures_page.folder = new_dir
         self.videos_page.refresh()
         self.pictures_page.refresh()
+        if self.map_page._loaded:
+            self.map_page.start_indexing()      # otra carpeta: el indice se pone al dia con ella
 
     def on_sync_finished(self):
         self.videos_page.refresh()
         self.pictures_page.refresh()
+        # lo recien copiado entra al indice GPS en segundo plano (solo lo nuevo)
+        self.map_page.start_indexing()
 
     def get_current_theme_color(self):
         return self.config.get("accent_color", "#00f2fe")
@@ -438,6 +452,7 @@ class MainWindow(HiLightActionsMixin, TrackExportMixin, QWidget):
         self.btn_nav_sync.setStyleSheet(style)
         self.btn_nav_videos.setStyleSheet(style)
         self.btn_nav_pictures.setStyleSheet(style)
+        self.btn_nav_map.setStyleSheet(style)
         self.btn_nav_activity.setStyleSheet(style)
         self.sync_page.apply_theme()
         if self.sync_page.gopro_connected:
@@ -676,6 +691,8 @@ class MainWindow(HiLightActionsMixin, TrackExportMixin, QWidget):
         set_nav_text(self.btn_nav_sync, self.lang, "nav_sync")
         set_nav_text(self.btn_nav_videos, self.lang, "nav_videos")
         set_nav_text(self.btn_nav_pictures, self.lang, "nav_pictures")
+        set_nav_text(self.btn_nav_map, self.lang, "nav_map")
+        self.map_page.retranslate(self.lang)
         set_nav_text(self.btn_import, self.lang, "nav_import")
         set_nav_text(self.btn_nav_activity, self.lang, "nav_activity")
         set_nav_text(self.btn_backup, self.lang, "nav_backup")
@@ -778,6 +795,7 @@ class MainWindow(HiLightActionsMixin, TrackExportMixin, QWidget):
         self.btn_nav_sync.setChecked(False)
         self.btn_nav_videos.setChecked(False)
         self.btn_nav_pictures.setChecked(False)
+        self.btn_nav_map.setChecked(False)
         self.btn_nav_activity.setChecked(False)
         btn.setChecked(True)
 

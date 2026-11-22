@@ -8,7 +8,7 @@ from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPainterPath
 from PySide6.QtWidgets import QToolTip, QWidget
 
 from ..i18n import tr
-from ..media import read_gopro_track
+from ..gps_index import fast_track
 from ..telemetry import chart_series
 from ..workers import ScanThread
 
@@ -238,7 +238,7 @@ class TelemetryExtras(QObject):
         self.gen += 1
         self.track = None
         self.chart.set_loading()
-        th = ScanThread(self.gen, read_gopro_track, path)
+        th = ScanThread(self.gen, fast_track, path)
         th.done.connect(self._on_track)
         th.start()
         self._thread = th

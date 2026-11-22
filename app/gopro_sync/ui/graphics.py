@@ -80,7 +80,7 @@ def crossed_emoji_icon(ch, px=18):
 
 NAV_ICONS = {"nav_sync": "\U0001F4F7", "nav_videos": "\U0001F3AC", "nav_pictures": "\U0001F4F8",
              "nav_activity": "\U0001F4CB", "nav_import": "\U0001F4C2", "nav_backup": "\U0001F4BE",
-             "nav_settings": "\u2699"}
+             "nav_settings": "\u2699", "nav_map": "\U0001F30D"}
 
 
 def set_nav_text(button, lang, key):
