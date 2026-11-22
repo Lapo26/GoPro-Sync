@@ -2,7 +2,7 @@
 import os
 from PySide6.QtCore import QEasingCurve, QPropertyAnimation, Qt, Signal
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QColorDialog, QDialog, QFileDialog, QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QLineEdit, QListWidget, QPushButton, QSlider, QStackedWidget, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QColorDialog, QDialog, QFileDialog, QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QLineEdit, QListWidget, QPushButton, QScrollArea, QSizePolicy, QSlider, QStackedWidget, QTabWidget, QVBoxLayout, QWidget
 from ..version import APP_VERSION
 from ..env import FONT_STACK, _safe_local_dir, _valid_start_dir, save_config
 from ..i18n import LANGUAGE_NATIVE_NAMES, tr
@@ -11,7 +11,7 @@ from ..sound import SoundManager, TabHoverSoundFilter
 from ..fileops import _is_same_or_inside
 from ..ui.widgets import AvatarPreview, ToggleSwitch, _make_language_buttons, show_toast
 from ..ui.thumbs import ThumbnailLoaderThread, move_thumb_cache, set_thumb_cache_dir
-from ..ui.window_size import VIEWER_SIZE_MODES
+from ..ui.window_size import VIEWER_SIZE_MODES, remember_window, restore_window
 
 class OnboardingWizard(QWidget):
     """Einrichtungsassistent, der beim allerersten Start EINGEBETTET im
@@ -356,6 +356,24 @@ class OnboardingWizard(QWidget):
         self.finished_setup.emit(result)
 
 
+def _scroll_page(page):
+    """Cada pestana se desplaza por su cuenta: asi la mas larga (Ubicacion)
+    no obliga a que todo el dialogo sea tan alto como la pantalla."""
+    area = QScrollArea()
+    area.setWidgetResizable(True)
+    area.setFrameShape(QFrame.Shape.NoFrame)
+    area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    area.setStyleSheet("QScrollArea { background: transparent; }")
+    area.viewport().setAutoFillBackground(False)
+    page.setAutoFillBackground(False)
+    # el ancho lo pone la ventana (los textos se acomodan en varias lineas)
+    page.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+    page.setObjectName("settingsPage")
+    page.setStyleSheet("QWidget#settingsPage { background: transparent; }")
+    area.setWidget(page)
+    return area
+
+
 class SettingsDialog(QDialog):
     """Ein zusammengelegter Einstellungs-Dialog: Design (Akzentfarbe +
     Hintergrundbild + Weichzeichner), Speicherort (Zielordner) und Sprache
@@ -371,8 +389,9 @@ class SettingsDialog(QDialog):
         self.lang = config.get("language", "de")
         self._settings_sound_played = False
         self.setWindowTitle(f"{tr(self.lang, 'settings_window_title')}  ·  v{APP_VERSION}")
-        self.setMinimumWidth(540)
-        self.resize(540, 880)
+        self.setMinimumSize(500, 420)
+        # tamano justo (no media pantalla); si el usuario lo cambia se recuerda
+        restore_window(self, "settings", config, default_size=(580, 600))
         accent = config.get("accent_color", "#00f2fe")
         self.setStyleSheet(f"""
             QDialog {{
@@ -415,6 +434,15 @@ class SettingsDialog(QDialog):
                 border-top-right-radius: 8px;
             }}
             QTabBar::tab:hover {{ color: rgba(255,255,255,0.85); }}
+            QScrollBar:vertical {{
+                background: transparent; width: 10px; margin: 4px 2px 4px 0;
+            }}
+            QScrollBar::handle:vertical {{
+                background: rgba(255,255,255,0.18); border-radius: 4px; min-height: 30px;
+            }}
+            QScrollBar::handle:vertical:hover {{ background: rgba(255,255,255,0.3); }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: transparent; }}
             QTabBar::tab:selected {{
                 background: rgba(255,255,255,0.07);
                 color: #ffffff;
@@ -437,10 +465,10 @@ class SettingsDialog(QDialog):
         tab_folder = QWidget()
         tab_sounds = QWidget()
         tab_system = QWidget()
-        self.tabs.addTab(tab_design, tr(self.lang, "tab_design"))
-        self.tabs.addTab(tab_folder, tr(self.lang, "tab_folder"))
-        self.tabs.addTab(tab_sounds, tr(self.lang, "tab_sounds"))
-        self.tabs.addTab(tab_system, tr(self.lang, "tab_system"))
+        self.tabs.addTab(_scroll_page(tab_design), tr(self.lang, "tab_design"))
+        self.tabs.addTab(_scroll_page(tab_folder), tr(self.lang, "tab_folder"))
+        self.tabs.addTab(_scroll_page(tab_sounds), tr(self.lang, "tab_sounds"))
+        self.tabs.addTab(_scroll_page(tab_system), tr(self.lang, "tab_system"))
 
         self._tab_hover_filter = TabHoverSoundFilter(self.tabs.tabBar(), self)
         self.tabs.tabBar().installEventFilter(self._tab_hover_filter)
@@ -588,6 +616,7 @@ class SettingsDialog(QDialog):
 
         self.list_backup = QListWidget()
         self.list_backup.setMinimumHeight(84)
+        self.list_backup.setMaximumHeight(130)     # unas pocas carpetas; no tiene que comerse la pestana
         self.list_backup.setStyleSheet("""
             QListWidget {
                 color: rgba(255,255,255,0.75); font-size: 12px;
@@ -783,6 +812,14 @@ class SettingsDialog(QDialog):
         btn_close = QPushButton(tr(self.lang, "close_btn"))
         btn_close.clicked.connect(self.accept)
         layout.addWidget(btn_close, alignment=Qt.AlignmentFlag.AlignRight)
+
+    def hideEvent(self, event):
+        if not event.spontaneous() and remember_window(self, "settings", self.config):
+            try:
+                save_config(self.config)
+            except Exception:
+                pass
+        super().hideEvent(event)
 
     def showEvent(self, event):
         super().showEvent(event)

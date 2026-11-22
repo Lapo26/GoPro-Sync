@@ -37,8 +37,10 @@ def _on_some_screen(rect):
     return None
 
 
-def restore_window(win, key, cfg, mode="remember", default_fraction=0.7):
-    """Aplica el tamaño antes de mostrar la ventana (también antes de exec())."""
+def restore_window(win, key, cfg, mode="remember", default_fraction=0.7, default_size=None):
+    """Aplica el tamaño antes de mostrar la ventana (también antes de exec()).
+    default_size (ancho, alto) en vez de default_fraction: tamaño fijo para la
+    primera vez, centrado sobre la ventana principal."""
     avail = _screen_for(win).availableGeometry()
     maximized = mode == "maximized"
     rect = None
@@ -55,6 +57,14 @@ def restore_window(win, key, cfg, mode="remember", default_fraction=0.7):
                 maximized = bool(st.get("max"))
             except (KeyError, TypeError, ValueError):
                 rect = None
+    if rect is None and default_size is not None:
+        dw, dh = min(default_size[0], avail.width()), min(default_size[1], int(avail.height() * 0.9))
+        parent = win.parentWidget()
+        center = parent.window().frameGeometry().center() if parent is not None else avail.center()
+        rect = QRect(0, 0, dw, dh)
+        rect.moveCenter(center)
+        rect.moveLeft(max(avail.left(), min(rect.left(), avail.right() - dw)))
+        rect.moveTop(max(avail.top(), min(rect.top(), avail.bottom() - dh)))
     if rect is None:
         rect = _centered(avail, default_fraction)
     win.setGeometry(rect)
