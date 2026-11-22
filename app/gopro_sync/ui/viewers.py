@@ -464,7 +464,7 @@ class VideoPlayerDialog(QDialog):
             accent = getattr(self.window().parent(), "get_current_theme_color", lambda: "#00f2fe")() \
                 if self.parent() is not None else "#00f2fe"
             self.map_panel = TileMapWidget(self._track["points"], accent, self, elapsed=self._track.get("elapsed"),
-                                           lang=getattr(self, "lang", "es"))
+                                           lang=getattr(self, "lang", "es"), cum=self._track.get("cum"))
             self.map_panel.fracs = self._track.get("fracs")     # mismo momento que el grafico
             self.map_panel.setMinimumSize(320, 240)
             self.split.addWidget(self.map_panel)

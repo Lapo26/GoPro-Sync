@@ -1,4 +1,5 @@
 """Lectura de metadatos: EXIF, MP4, fechas de captura, videos danados y GPS (GPMF)."""
+import math
 import os
 import struct
 from datetime import datetime
@@ -642,7 +643,9 @@ def format_duration(seconds):
 
 
 def _haversine(a, b):
-    import math
+    # (math importado arriba: un "import" dentro de la funcion pasa por el
+    # gancho de importacion de PySide en cada llamada y con 60.000 puntos
+    # GPS eso solo tardaba segundos)
     la1, lo1, la2, lo2 = map(math.radians, (a[0], a[1], b[0], b[1]))
     h = math.sin((la2 - la1) / 2) ** 2 + math.cos(la1) * math.cos(la2) * math.sin((lo2 - lo1) / 2) ** 2
     return 6371000 * 2 * math.asin(min(1.0, math.sqrt(h)))
@@ -711,8 +714,61 @@ def clean_gps(blocks, duration):
             "elapsed": sec * len(blocks)}            # tiempo real grabado (en un time-lapse, mas que el video)
 
 
+def cumulative_distance(points):
+    """Distancia recorrida hasta cada punto. Solo suma cuando el punto se
+    alejo 3 m del anterior tenido en cuenta, para que el temblor del GPS con
+    la camara quieta no sume metros."""
+    cum, total, anchor = [], 0.0, None
+    for p in points:
+        if anchor is None:
+            anchor = p
+        else:
+            d = _haversine(anchor, p)
+            if d >= 3:
+                total += d
+                anchor = p
+        cum.append(total)
+    return cum
+
+
+_TRACK_CACHE = {}          # (ruta, tamano, fecha) -> recorrido ya leido
+_TRACK_LOCKS = {}
+_TRACK_LOCK = None
+
+
 def read_gopro_track(path):
-    return clean_gps(read_gopro_gps(path), read_mp4_info(path).get("duration") or 0)
+    """Recorrido GPS limpio del video (ver clean_gps), con la distancia
+    acumulada por punto ("cum") ya calculada para el mapa. Queda en memoria:
+    el reproductor y el grafico de telemetria lo piden a la vez al abrir un
+    video y antes se leia y procesaba dos veces (en hilos que compiten con la
+    interfaz)."""
+    import threading
+    global _TRACK_LOCK
+    try:
+        st = os.stat(path)
+        key = (os.path.normcase(os.path.abspath(path)), st.st_size, int(st.st_mtime))
+    except OSError:
+        key = None
+    if _TRACK_LOCK is None:
+        _TRACK_LOCK = threading.Lock()
+    with _TRACK_LOCK:
+        if key in _TRACK_CACHE:
+            return _TRACK_CACHE[key]
+        lock = _TRACK_LOCKS.setdefault(key, threading.Lock())
+    with lock:                           # si otro hilo ya lo esta leyendo, se espera
+        with _TRACK_LOCK:
+            if key in _TRACK_CACHE:
+                return _TRACK_CACHE[key]
+        track = clean_gps(read_gopro_gps(path), read_mp4_info(path).get("duration") or 0)
+        if track and track.get("points"):
+            track["cum"] = cumulative_distance(track["points"])
+        if key is not None:
+            with _TRACK_LOCK:
+                if len(_TRACK_CACHE) >= 8:
+                    _TRACK_CACHE.pop(next(iter(_TRACK_CACHE)))
+                _TRACK_CACHE[key] = track
+                _TRACK_LOCKS.pop(key, None)
+        return track
 
 
 def read_mp4_info(path):
