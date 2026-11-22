@@ -492,3 +492,62 @@ def fast_track(path, db_path=None):
             _FAST.pop(next(iter(_FAST)))
         _FAST[key] = track
     return track
+
+
+def read_meta(db_path):
+    """Estado de los procesos de fondo (para mostrar el progreso)."""
+    if not os.path.exists(db_path):
+        return {}
+    try:
+        conn = sqlite3.connect(db_path, timeout=2)
+        try:
+            return get_meta(conn)
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return {}
+
+
+def photo_points(path, db_path=None):
+    """Para el mapa del visor de fotos: ((lat, lon) de la foto o None,
+    [(ruta, lat, lon)] de las fotos con GPS de ese mismo dia, en orden).
+    Del indice; si la foto todavia no esta, se lee su EXIF (pocos KB) y se
+    guarda."""
+    from datetime import datetime, timedelta
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None, []
+    db_path = db_path or default_db_path()
+    key = path_key(path)
+    row = None
+    try:
+        conn = connect(db_path)
+        try:
+            r = conn.execute("SELECT size, mtime, ok, lat, lon, t FROM media WHERE key=?", (key,)).fetchone()
+            if r and (r[0], r[1]) == (st.st_size, int(st.st_mtime)):
+                row = {"ok": r[2], "lat": r[3], "lon": r[4], "t": r[5]}
+            else:
+                row = index_file(path, "p")
+                _insert(conn, path, st.st_size, int(st.st_mtime), row)
+                conn.commit()
+            if not row["ok"]:
+                return None, []
+            same_day = []
+            if row["t"]:
+                d0 = datetime.fromtimestamp(row["t"]).replace(hour=0, minute=0, second=0, microsecond=0)
+                t0, t1 = d0.timestamp(), (d0 + timedelta(days=1)).timestamp()
+                same_day = conn.execute("SELECT path, lat, lon FROM media WHERE kind='p' AND ok=1 AND t>=? AND t<?"
+                                        " ORDER BY t", (t0, t1)).fetchall()
+        finally:
+            conn.close()
+    except (sqlite3.Error, OSError) as e:
+        print("[Indice GPS] foto", path, e)
+        row = index_file(path, "p")
+        same_day = []
+        if not row["ok"]:
+            return None, []
+    pts = [(p, la, lo) for p, la, lo in same_day]
+    if not any(path_key(p) == key for p, _a, _b in pts):
+        pts.append((path, row["lat"], row["lon"]))
+    return (row["lat"], row["lon"]), pts

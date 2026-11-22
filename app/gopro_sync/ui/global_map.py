@@ -875,9 +875,15 @@ class GlobalMapPage(QWidget):
             self._on_worker_done(proc)
 
     def _on_worker_done(self, proc):
-        if proc in self._procs:
-            self._procs.remove(proc)
+        # por identidad: comparar con == llama a Qt y el objeto puede estar ya
+        # destruido (se cerro la ventana con el proceso andando)
+        if not any(p is proc for p in self._procs):
+            return
+        self._procs = [p for p in self._procs if p is not proc]
+        try:
             proc.deleteLater()
+        except RuntimeError:
+            pass
         if self._procs:
             return
         if self._again:

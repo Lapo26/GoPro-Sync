@@ -726,8 +726,14 @@ class TileMapWidget(QWidget):
         painter.drawText(r, Qt.AlignmentFlag.AlignCenter, text)
         if not self.online:
             note = tr(self.lang, "map_offline_notice")
-            nw = painter.fontMetrics().horizontalAdvance(note) + 12
-            nr = QRectF(4, self.height() - 20, min(nw, self.width() - tw - 12), 18)
+            room = self.width() - tw - 24
+            if room < 60:
+                painter.restore()
+                return
+            fm = painter.fontMetrics()
+            note = fm.elidedText(note, Qt.TextElideMode.ElideRight, int(room))   # panel angosto: con "..."
+            nw = fm.horizontalAdvance(note) + 12
+            nr = QRectF(4, self.height() - 20, nw, 18)
             painter.setBrush(QColor(0, 0, 0, 170))
             painter.setPen(Qt.PenStyle.NoPen)
             painter.drawRoundedRect(nr, 4, 4)
@@ -863,6 +869,74 @@ class TileMapWidget(QWidget):
             self.pool.shutdown(wait=False, cancel_futures=True)
         except Exception:
             pass
+
+
+class PhotoMapWidget(TileMapWidget):
+    """Mapa del visor de fotos: la foto que se ve (marca blanca) y las demas
+    fotos de ese dia con GPS (puntos). Sin linea ni telemetria."""
+    PHOTO_COLOR = "#ffb347"
+
+    def __init__(self, accent, parent=None, lang="es"):
+        super().__init__([], accent, parent, lang=lang)
+        self.setMinimumSize(260, 200)
+        self.paths = []
+
+    def set_points(self, pts, current):
+        """pts: [(ruta, lat, lon)]; current: ruta de la foto que se ve."""
+        paths = [p for p, _a, _b in pts]
+        idx = next((i for i, p in enumerate(paths) if os.path.normcase(p) == os.path.normcase(current)), None)
+        if paths != self.paths:
+            self.paths = paths
+            self.points = [(la, lo, 0.0, 0.0) for _p, la, lo in pts]
+            self._cum = [0.0] * len(self.points)
+            self._route_pts, self._base = {}, None
+            lats = [p[0] for p in self.points]
+            lons = [p[1] for p in self.points]
+            self._bounds = (min(lats), max(lats), min(lons), max(lons)) if self.points else None
+            self._user_moved = False
+            self.marker = idx
+            self.fit()
+            self._invalidate()
+            return
+        old = self._marker_rect(self.marker)
+        self.marker = idx
+        if idx is not None:
+            c = self._point_screen(idx)
+            if not (30 <= c.x() <= self.width() - 30 and 30 <= c.y() <= self.height() - 30):
+                self.cx, self.cy = self._world(self.points[idx][0], self.points[idx][1], self.zoom)
+                self.update()
+                return
+        for r in (old, self._marker_rect(idx)):
+            if r is not None:
+                self.update(r)
+
+    def fit(self):
+        super().fit()
+        if self.zoom > 16:                    # una sola foto: no acercar de mas
+            f = 2.0 ** (16 - self.zoom)
+            self.cx, self.cy, self.zoom, self.scale = self.cx * f, self.cy * f, 16, 1.0
+
+    def _paint_telemetry(self, painter):
+        pass
+
+    def _render_route(self, view):
+        z, s, cx, cy, w, h, dpr, layer = view
+        img = self._new_layer(view)
+        if not self.points:
+            return img
+        vw, vh = w / s, h / s
+        left, top = cx - vw / 2, cy - vh / 2
+        p = QPainter(img)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(QPen(QColor("#ffffff"), 1.5))
+        p.setBrush(QColor(self.PHOTO_COLOR))
+        for la, lo, _a, _v in self.points:
+            wx, wy = self._world(la, lo, z)
+            sx, sy = (wx - left) * s, (wy - top) * s
+            if -10 <= sx <= w + 10 and -10 <= sy <= h + 10:
+                p.drawEllipse(QPointF(sx, sy), 5, 5)
+        p.end()
+        return img
 
 
 class GpsMapDialog(QDialog):

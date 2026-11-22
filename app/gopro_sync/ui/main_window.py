@@ -43,6 +43,7 @@ from ..ui.camera_page import CameraGalleryPage
 from ..ui.sync_tab import SyncTabWidget
 from ..ui.settings import OnboardingWizard, SettingsDialog
 from ..ui.global_map import GlobalMapPage
+from ..ui.background import BackgroundWork
 
 class MainWindow(HiLightActionsMixin, TrackExportMixin, QWidget):
     def __init__(self):
@@ -268,6 +269,12 @@ class MainWindow(HiLightActionsMixin, TrackExportMixin, QWidget):
         # Mapa global: no carga nada hasta que se abre (el indice se llena en otro proceso)
         self.map_page = GlobalMapPage(lambda: self.sync_page.sync_target_dir, self.get_current_theme_color, self.lang)
         self.MAP_INDEX = self.pages.addWidget(self.map_page)
+        # Trabajo de fondo (GPS de la biblioteca, miniaturas) con la ventana
+        # minimizada o cerrada junto al reloj
+        self.bg_work = BackgroundWork(self)
+        self.bg_work.status_changed.connect(self._on_bg_status)
+        self.bg_work.all_done.connect(self._on_bg_done)
+        self._quit_when_bg_done = False
         self.sync_page.camera_files_requested.connect(self.show_camera_files)
         self.camera_page.back_requested.connect(lambda: self.switch_page(0, self.btn_nav_sync))
         self.camera_page.sync_requested.connect(self._sync_camera_selection)
@@ -281,6 +288,8 @@ class MainWindow(HiLightActionsMixin, TrackExportMixin, QWidget):
         self.taskbar = TaskbarProgress(self)
         self.sync_page.activity_progress.connect(self.taskbar.set)
         QTimer.singleShot(8000, self.check_updates)
+        # Arranque con Windows (sin ventana): al rato, aprovechar el tiempo
+        QTimer.singleShot(60000, self._idle_start_if_hidden)
 
         # Assistent nur bauen, wenn er tatsaechlich noch gebraucht wird -
         # spart bei jedem normalen Start (nach der ersten Einrichtung) das
@@ -801,6 +810,11 @@ class MainWindow(HiLightActionsMixin, TrackExportMixin, QWidget):
 
     def changeEvent(self, event):
         super().changeEvent(event)
+        if event.type() == QEvent.Type.WindowStateChange and hasattr(self, "bg_work"):
+            if self.isMinimized():
+                self.bg_work.start()             # minimizada: aprovechar el tiempo
+            else:
+                self.bg_work.set_window_visible(self.isVisible())
         if event.type() == QEvent.Type.ActivationChange and self.isActiveWindow():
             page = self.pages.currentWidget() if hasattr(self, "pages") else None
             if hasattr(page, "soft_refresh"):
@@ -831,6 +845,36 @@ class MainWindow(HiLightActionsMixin, TrackExportMixin, QWidget):
         tb = getattr(self, "taskbar", None)
         if tb is not None and tb.last is not None:
             QTimer.singleShot(600, tb.apply)
+        self._quit_when_bg_done = False          # la volvieron a abrir: no cerrarse sola
+        bg = getattr(self, "bg_work", None)
+        if bg is not None:
+            bg.set_window_visible(not self.isMinimized())
+
+    # ---- trabajo de fondo
+    def _idle_start_if_hidden(self):
+        if not self.isVisible() or self.isMinimized():
+            self.bg_work.start()
+
+    def _sync_busy(self):
+        sp = getattr(self, "sync_page", None)
+        return bool(sp is not None and (getattr(sp, "_current_task", None) or getattr(sp, "_backup_task", None)))
+
+    def _on_bg_status(self, text, pct):
+        tray = getattr(self, "tray", None)
+        if tray is not None and hasattr(tray, "set_bg_status"):
+            tray.set_bg_status(text, pct)
+        if not self._sync_busy():
+            # progreso en el boton de la barra de tareas (minimizada)
+            self.taskbar.set(pct if (text and self.isMinimized()) else None)
+
+    def _on_bg_done(self):
+        if self._quit_when_bg_done and not self.isVisible() and not self._sync_busy():
+            self.quit_app()                     # se cerro la ventana sin inicio con Windows: listo, salir
+
+    def _ensure_tray(self):
+        if getattr(self, "tray", None) is None:
+            setup_tray(QApplication.instance(), self, self.lang)
+        return getattr(self, "tray", None)
 
     def closeEvent(self, event):
         # Con inicio automatico (icono en la bandeja), cerrar la ventana la
@@ -839,6 +883,16 @@ class MainWindow(HiLightActionsMixin, TrackExportMixin, QWidget):
         if tray is not None and not getattr(self, "_really_quit", False) and self.config.get("autostart_enabled", False):
             event.ignore()
             # Sin aviso de "sigue funcionando junto al reloj": el usuario no lo quiere.
+            self.hide()
+            self.bg_work.start()                 # aprovechar el tiempo con la ventana cerrada
+            return
+        # Sin inicio con Windows: si hay trabajo de fondo, la ventana se cierra
+        # pero la app termina eso junto al reloj y despues sale sola.
+        if (not getattr(self, "_really_quit", False) and not getattr(self, "_quit_confirmed", False)
+                and not self._sync_busy() and QSystemTrayIcon.isSystemTrayAvailable()
+                and self.bg_work.start() and self._ensure_tray() is not None):
+            event.ignore()
+            self._quit_when_bg_done = True
             self.hide()
             return
         if not getattr(self, "_quit_confirmed", False) and not self._stop_tasks_for_quit():
@@ -898,6 +952,7 @@ class MainWindow(HiLightActionsMixin, TrackExportMixin, QWidget):
         if not self._stop_tasks_for_quit():
             return
         self._really_quit = True
+        self.bg_work.stop()
         tray = getattr(self, "tray", None)
         if tray is not None:
             tray.hide()
@@ -965,6 +1020,32 @@ class AnimatedSplash(QWidget):
             painter.drawText(QRectF(0, self.height() - 96, self.width(), 20), Qt.AlignmentFlag.AlignCenter, self.status)
 
 
+def _tray_icon_with_ring(pct, accent):
+    """Icono de la bandeja con un aro de progreso (pct 0-100, o -1 si todavia
+    no se sabe cuanto falta: aro punteado)."""
+    from PySide6.QtGui import QIcon, QPen
+    size = 64
+    pm = QPixmap(size, size)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    load_app_icon().paint(p, 8, 8, size - 16, size - 16)
+    r = QRectF(3, 3, size - 6, size - 6)
+    p.setPen(QPen(QColor(0, 0, 0, 150), 7))
+    p.drawEllipse(r)
+    pen = QPen(QColor(accent), 6)
+    if pct < 0:
+        pen.setStyle(Qt.PenStyle.DotLine)
+        p.setPen(pen)
+        p.drawEllipse(r)
+    else:
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        p.setPen(pen)
+        p.drawArc(r, 90 * 16, -int(max(2, pct) / 100 * 360 * 16))
+    p.end()
+    return QIcon(pm)
+
+
 def setup_tray(app, window, lang):
     """Icono junto al reloj: clic = abrir; menu: Abrir / Salir. Muestra el
     progreso de la copia en curso al pasar el mouse."""
@@ -973,6 +1054,11 @@ def setup_tray(app, window, lang):
     tray = QSystemTrayIcon(load_app_icon(), app)
     tray.setToolTip("GoPro Sync")
     menu = QMenu()
+    status_act = menu.addAction("")
+    status_act.setEnabled(False)
+    status_act.setVisible(False)
+    status_sep = menu.addSeparator()
+    status_sep.setVisible(False)
     menu.addAction(tr(lang, "tray_open"), lambda: bring_to_front(window))
     menu.addSeparator()
     menu.addAction(tr(lang, "tray_quit"), window.quit_app)
@@ -984,9 +1070,27 @@ def setup_tray(app, window, lang):
             bring_to_front(window)
     tray.activated.connect(activated)
 
+    bg_state = {"text": None, "pct": None, "ring": None}
+
+    def set_bg_status(text, pct):
+        """Trabajo de fondo: texto al pasar el mouse, linea en el menu y un aro
+        de progreso en el icono."""
+        bg_state["text"], bg_state["pct"] = text, pct
+        status_act.setText(text.replace("\n", "  ·  ") if text else "")
+        status_act.setVisible(bool(text))
+        status_sep.setVisible(bool(text))
+        if not window._sync_busy():
+            tray.setToolTip("GoPro Sync" + ("\n" + text if text else ""))
+        ring = None if not text else (-1 if pct is None else int(pct))
+        if ring != bg_state["ring"]:
+            bg_state["ring"] = ring
+            tray.setIcon(load_app_icon() if ring is None else _tray_icon_with_ring(ring, window.get_current_theme_color()))
+    tray.set_bg_status = set_bg_status
+
     def progress(pct):
         if pct is None:
-            tray.setToolTip("GoPro Sync")
+            text = bg_state["text"]
+            tray.setToolTip("GoPro Sync" + ("\n" + text if text else ""))
         else:
             cur = window.sync_page._current_task or window.sync_page._backup_task
             kind = cur[0] if cur else ""

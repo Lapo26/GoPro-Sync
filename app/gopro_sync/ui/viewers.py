@@ -1017,6 +1017,14 @@ class ImageViewerDialog(QDialog):
         self.setStyleSheet("background: #000;")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        # foto | mapa (el mapa se crea la primera vez que se abre)
+        self.split = QSplitter(Qt.Orientation.Horizontal)
+        self.split.setChildrenCollapsible(False)
+        self.split.setStyleSheet("QSplitter::handle { background: #1c1e29; width: 4px; }")
+        self.split.splitterMoved.connect(lambda *_a: self._place_overlays())
+        self.map_panel = None
+        self._map_note = None
+        self._map_token = 0
 
         self.view = ZoomableGraphicsView()
         self.view.setStyleSheet("border: none; background: #000;")
@@ -1030,7 +1038,8 @@ class ImageViewerDialog(QDialog):
         self.pixmap_item = self.scene.addPixmap(QPixmap())
         self.view.setScene(self.scene)
         self.view.mouseDoubleClickEvent = lambda event: self._fit_to_view()
-        layout.addWidget(self.view)
+        self.split.addWidget(self.view)
+        layout.addWidget(self.split)
 
         # Boton de pantalla completa sobre la foto (arriba a la derecha); F11 o F tambien.
         self.btn_full = QPushButton(self)
@@ -1041,6 +1050,18 @@ class ImageViewerDialog(QDialog):
         self.btn_full.setStyleSheet("QPushButton { background: rgba(0,0,0,0.55); border-radius: 19px; border: none; }"
                                     " QPushButton:hover { background: rgba(255,255,255,0.2); }")
         self.btn_full.clicked.connect(self.toggle_fullscreen)
+        # Mapa: donde se saco la foto (y las demas de ese dia)
+        self.btn_map = QPushButton(self)
+        self.btn_map.setIcon(emoji_icon("🗺", 18))
+        self.btn_map.setIconSize(QSize(18, 18))
+        self.btn_map.setFixedSize(38, 38)
+        self.btn_map.setCheckable(True)
+        self.btn_map.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_map.setToolTip(tr(lang, "photo_map_toggle"))
+        self.btn_map.setStyleSheet("QPushButton { background: rgba(0,0,0,0.55); border-radius: 19px; border: none; }"
+                                   " QPushButton:hover { background: rgba(255,255,255,0.2); }"
+                                   " QPushButton:checked { background: rgba(255,255,255,0.32); }")
+        self.btn_map.clicked.connect(lambda: self.toggle_map(save=True))
 
         nav_style = ("QPushButton { background: rgba(0,0,0,0.45); border-radius: 24px; border: none;"
                      " color: #fff; font-size: 26px; font-weight: 700; padding-bottom: 3px; }"
@@ -1059,6 +1080,78 @@ class ImageViewerDialog(QDialog):
         self.lbl_pos.setStyleSheet("background: rgba(0,0,0,0.55); color: rgba(255,255,255,0.85); border-radius: 10px;"
                                    " padding: 4px 10px; font-size: 12px;")
         self.show_path(path)
+        if _app_config(parent).get("photo_map_on"):
+            self.btn_map.setChecked(True)
+            QTimer.singleShot(0, lambda: self.toggle_map(save=False))
+
+    # ---- mapa de la foto
+    def toggle_map(self, save=True):
+        on = self.btn_map.isChecked()
+        if save:
+            SoundManager.play_click()
+            cfg = _app_config(self.parent())
+            cfg["photo_map_on"] = on
+            try:
+                save_config(cfg)
+            except Exception:
+                pass
+        if on and self.map_panel is None:
+            from ..ui.map import PhotoMapWidget
+            accent = "#00f2fe"
+            main = self.parent().window() if self.parent() is not None else None
+            if main is not None and hasattr(main, "get_current_theme_color"):
+                accent = main.get_current_theme_color()
+            self.map_panel = PhotoMapWidget(accent, self, lang=self.lang)
+            self._map_note = QLabel(self.map_panel)
+            self._map_note.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._map_note.setStyleSheet("background: rgba(20,22,30,0.88); color: #fff; border-radius: 10px;"
+                                         " padding: 10px 14px; font-size: 13px;")
+            self.split.addWidget(self.map_panel)
+            w = max(self.width(), 900)
+            self.split.setSizes([w - 400, 400])
+        if self.map_panel is not None:
+            self.map_panel.setVisible(on)
+            if on:
+                self._update_map()
+        QTimer.singleShot(0, self._place_overlays)
+
+    def _show_map_note(self, text):
+        n = self._map_note
+        if n is None:
+            return
+        if not text:
+            n.hide()
+            return
+        n.setText(text)
+        n.adjustSize()
+        n.move((self.map_panel.width() - n.width()) // 2, (self.map_panel.height() - n.height()) // 2)
+        n.show()
+        n.raise_()
+
+    def _update_map(self):
+        if self.map_panel is None or not self.map_panel.isVisible():
+            return
+        from ..gps_index import photo_points
+        self._map_token += 1
+        token, path = self._map_token, self._path
+        if not self.map_panel.paths:
+            self._show_map_note(tr(self.lang, "photo_map_reading"))
+        th = ScanThread(token, photo_points, path)
+        th.done.connect(lambda t, res, p=path: self._on_photo_points(t, res, p))
+        self._map_thread = th
+        th.start()
+
+    def _on_photo_points(self, token, result, path):
+        if token != self._map_token or self.map_panel is None:
+            return
+        cur, pts = result or (None, [])
+        if cur is None:
+            self._show_map_note(tr(self.lang, "photo_map_nogps"))
+            self.map_panel.marker = None
+            self.map_panel.update()
+            return
+        self._show_map_note(None)
+        self.map_panel.set_points(pts, path)
 
     def _read(self, path):
         reader = QImageReader(path)
@@ -1111,6 +1204,8 @@ class ImageViewerDialog(QDialog):
         self.lbl_pos.setVisible(n > 1)
         QTimer.singleShot(0, self._fit_to_view)
         QTimer.singleShot(0, self._prefetch)
+        if getattr(self, "map_panel", None) is not None:
+            self._update_map()
 
     def step(self, delta):
         try:
@@ -1123,14 +1218,22 @@ class ImageViewerDialog(QDialog):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self.btn_full.move(self.width() - 50, 12)
-        self.btn_full.raise_()
-        y = (self.height() - 48) // 2
-        self.btn_prev.move(14, y)
-        self.btn_next.move(self.width() - 62, y)
-        self.lbl_pos.move(12, 12)
-        for w in (self.btn_prev, self.btn_next, self.lbl_pos):
+        self._place_overlays()
+
+    def _place_overlays(self):
+        """Botones sobre la foto (no sobre el mapa)."""
+        vx, vw, h = self.view.x(), self.view.width(), self.height()
+        self.btn_full.move(vx + vw - 50, 12)
+        self.btn_map.move(vx + vw - 96, 12)
+        y = (h - 48) // 2
+        self.btn_prev.move(vx + 14, y)
+        self.btn_next.move(vx + vw - 62, y)
+        self.lbl_pos.move(vx + 12, 12)
+        for w in (self.btn_full, self.btn_map, self.btn_prev, self.btn_next, self.lbl_pos):
             w.raise_()
+        if self._map_note is not None and self._map_note.isVisible():
+            n = self._map_note
+            n.move((self.map_panel.width() - n.width()) // 2, (self.map_panel.height() - n.height()) // 2)
         QTimer.singleShot(0, self._fit_to_view)
 
     def toggle_fullscreen(self):
@@ -1142,12 +1245,20 @@ class ImageViewerDialog(QDialog):
             _remember_viewer_size(self, "image")
         super().hideEvent(event)
 
+    def done(self, r):
+        if self.map_panel is not None:
+            self.map_panel.shutdown()
+        super().done(r)
+
     def keyPressEvent(self, event):
         k = event.key()
         if k in (Qt.Key.Key_F11, Qt.Key.Key_F):
             self.toggle_fullscreen()
         elif k == Qt.Key.Key_Escape and self.isFullScreen():
             self.toggle_fullscreen()
+        elif k == Qt.Key.Key_M:
+            self.btn_map.setChecked(not self.btn_map.isChecked())
+            self.toggle_map(save=True)
         elif k in (Qt.Key.Key_Right, Qt.Key.Key_PageDown, Qt.Key.Key_Space):
             self.step(1)
         elif k in (Qt.Key.Key_Left, Qt.Key.Key_PageUp, Qt.Key.Key_Backspace):
