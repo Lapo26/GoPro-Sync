@@ -451,7 +451,9 @@ class ThumbGridView(QAbstractScrollArea):
     context = Signal(str, QPoint)
     selection_changed = Signal()
     long_pressed = Signal(str)          # mantener apretado (o Ctrl+clic fuera del modo seleccion)
-    SP, HEADER_H = 18, 40
+    # HEADER_H: titulo de fecha (34 px de texto) + 10 px libres debajo, donde
+    # asoma la "pila" de las rafagas sin taparlo (ver _paint_stack_back)
+    SP, HEADER_H, HEADER_TEXT_H = 18, 50, 34
     ROW_H = THUMB_H + 18
     LRU_CAP = 240
 
@@ -681,7 +683,7 @@ class ThumbGridView(QAbstractScrollArea):
             if kind == "h":
                 painter.setFont(self.header_font)
                 painter.setPen(QColor(255, 255, 255, 140))
-                painter.drawText(QRect(x0, yy + 6, self.viewport().width() - x0, self.HEADER_H - 6),
+                painter.drawText(QRect(x0, yy + 6, self.viewport().width() - x0, self.HEADER_TEXT_H),
                                  Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, payload)
                 continue
             for c, path in enumerate(payload):

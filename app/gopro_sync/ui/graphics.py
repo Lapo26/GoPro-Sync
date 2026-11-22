@@ -1,7 +1,7 @@
 """Imagenes, iconos, sombras y estilos compartidos por la interfaz."""
 import os
-from PySide6.QtCore import QEvent, QObject, QPropertyAnimation, QRectF, QSize, Qt
-from PySide6.QtGui import QColor, QFont, QGuiApplication, QIcon, QImage, QPainter, QPainterPath, QPixmap
+from PySide6.QtCore import QEvent, QObject, QPointF, QPropertyAnimation, QRectF, QSize, Qt
+from PySide6.QtGui import QColor, QFont, QGuiApplication, QIcon, QImage, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import QApplication, QGraphicsBlurEffect, QGraphicsDropShadowEffect, QGraphicsPixmapItem, QGraphicsScene, QPushButton
 from ..env import LOGO_FILENAMES, asset_path
 from ..i18n import tr
@@ -48,6 +48,31 @@ def emoji_icon(ch, px=18):
         f.setPixelSize(int(px * 0.85))
         painter.setFont(f)
         painter.drawText(QRectF(0, 0, px, px), Qt.AlignmentFlag.AlignCenter, ch)
+        painter.end()
+        _EMOJI_ICON_CACHE[key] = QIcon(pm)
+    return _EMOJI_ICON_CACHE[key]
+
+
+def crossed_emoji_icon(ch, px=18):
+    """El mismo emoji de emoji_icon() tachado con una raya roja en diagonal
+    (p. ej. el parlante del reproductor cuando esta en silencio): se reconoce
+    mejor que el emoji de "parlante silenciado", que es otro dibujo."""
+    try:
+        dpr = max(1.0, QGuiApplication.primaryScreen().devicePixelRatio())
+    except Exception:
+        dpr = 1.0
+    key = ("crossed", ch, px, dpr)
+    if key not in _EMOJI_ICON_CACHE:
+        pm = emoji_icon(ch, px).pixmap(px, px)
+        pm = pm.copy()
+        pm.setDevicePixelRatio(dpr)
+        painter = QPainter(pm)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        a, b = QPointF(px * 0.14, px * 0.14), QPointF(px * 0.86, px * 0.86)
+        painter.setPen(QPen(QColor(13, 13, 18, 230), px * 0.2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        painter.drawLine(a, b)                       # borde oscuro: se ve sobre cualquier fondo
+        painter.setPen(QPen(QColor("#ff5c5c"), px * 0.11, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        painter.drawLine(a, b)
         painter.end()
         _EMOJI_ICON_CACHE[key] = QIcon(pm)
     return _EMOJI_ICON_CACHE[key]

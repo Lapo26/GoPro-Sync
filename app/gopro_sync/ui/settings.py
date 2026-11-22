@@ -11,6 +11,7 @@ from ..sound import SoundManager, TabHoverSoundFilter
 from ..fileops import _is_same_or_inside
 from ..ui.widgets import AvatarPreview, ToggleSwitch, _make_language_buttons, show_toast
 from ..ui.thumbs import ThumbnailLoaderThread, move_thumb_cache, set_thumb_cache_dir
+from ..ui.window_size import VIEWER_SIZE_MODES
 
 class OnboardingWizard(QWidget):
     """Einrichtungsassistent, der beim allerersten Start EINGEBETTET im
@@ -725,6 +726,35 @@ class SettingsDialog(QDialog):
         divider_system.setStyleSheet("background-color: rgba(255,255,255,0.08); border: none; margin-top: 6px; margin-bottom: 6px;")
         system_layout.addWidget(divider_system)
 
+        # ---- Tamano con que abren el reproductor y el visor de fotos
+        section_windows = QLabel(tr(self.lang, "section_windows"))
+        section_windows.setStyleSheet("font-size: 13px; font-weight: 800; letter-spacing: 1px; color: rgba(255,255,255,0.45); background: transparent;")
+        system_layout.addWidget(section_windows)
+        lbl_viewer_size = QLabel(tr(self.lang, "viewer_size_label"))
+        lbl_viewer_size.setStyleSheet("font-size: 14px; font-weight: bold;")
+        system_layout.addWidget(lbl_viewer_size)
+        size_row = QHBoxLayout()
+        size_row.setSpacing(8)
+        self.viewer_size_btns = {}
+        current_size = self.config.get("viewer_size", "remember")
+        for mode in VIEWER_SIZE_MODES:
+            b = QPushButton(tr(self.lang, f"viewer_size_{mode}"))
+            b.setCheckable(True)
+            b.setChecked(mode == current_size)
+            b.clicked.connect(lambda _c=False, m=mode: self.set_viewer_size(m))
+            size_row.addWidget(b)
+            self.viewer_size_btns[mode] = b
+        size_row.addStretch()
+        system_layout.addLayout(size_row)
+        viewer_size_hint = QLabel(tr(self.lang, "viewer_size_hint"))
+        viewer_size_hint.setStyleSheet("color: #777; font-size: 11px;")
+        viewer_size_hint.setWordWrap(True)
+        system_layout.addWidget(viewer_size_hint)
+        divider_windows = QFrame()
+        divider_windows.setFixedHeight(1)
+        divider_windows.setStyleSheet("background-color: rgba(255,255,255,0.08); border: none;")
+        system_layout.addWidget(divider_windows)
+
         section_lang = QLabel(tr(self.lang, "section_language"))
         section_lang.setStyleSheet("font-size: 13px; font-weight: 800; letter-spacing: 1px; color: rgba(255,255,255,0.45); background: transparent;")
         system_layout.addWidget(section_lang)
@@ -919,6 +949,13 @@ class SettingsDialog(QDialog):
 
     def _save_player_volume(self):
         save_config(self.config)
+
+    def set_viewer_size(self, mode):
+        self.config["viewer_size"] = mode
+        save_config(self.config)
+        for m, b in self.viewer_size_btns.items():
+            b.setChecked(m == mode)
+        SoundManager.play_click()
 
     def on_player_muted_toggle(self, state):
         self.config["player_start_muted"] = bool(state)

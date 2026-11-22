@@ -1,18 +1,19 @@
 """Reproductor de video y visor de fotos."""
 import os
-from PySide6.QtCore import QPointF, QRectF, QSize, QTimer, QUrl, Qt
+from PySide6.QtCore import QPointF, QRectF, QSize, QTimer, QUrl, Qt, Signal
 from PySide6.QtGui import QColor, QIcon, QImageReader, QPainter, QPen, QPixmap
 from PySide6.QtMultimedia import QAudioOutput, QMediaMetaData, QMediaPlayer, QVideoSink
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (QDialog, QGraphicsScene, QGraphicsView, QHBoxLayout, QLabel, QPushButton, QSlider,
                                QSplitter, QStackedWidget, QStyle, QStyleOptionSlider, QVBoxLayout, QWidget)
-from ..env import FONT_STACK, load_config
+from ..env import FONT_STACK, load_config, save_config
 from ..i18n import tr
 from ..sound import SoundManager
 from ..media import _read_moov, read_gopro_track
 from ..workers import ScanThread
-from ..ui.graphics import emoji_icon
+from ..ui.graphics import crossed_emoji_icon, emoji_icon
 from ..ui.widgets import VideoFrameView, save_captured_photo, show_toast
+from ..ui.window_size import enable_min_max_buttons, remember_window, restore_window
 
 def fullscreen_icon(px=18, leave=False):
     """Icono de pantalla completa dibujado (las 4 esquinas): sin depender de
@@ -36,27 +37,51 @@ def fullscreen_icon(px=18, leave=False):
 
 
 def toggle_fullscreen(window):
+    # al salir de pantalla completa vuelve como estaba (maximizada o no)
     if window.isFullScreen():
-        window.showNormal()
+        if window.property("gpsync_was_maximized"):
+            window.showMaximized()
+        else:
+            window.showNormal()
     else:
+        window.setProperty("gpsync_was_maximized", window.isMaximized())
         window.showFullScreen()
 
 
-def _player_audio_defaults(parent):
-    """(volumen 0-100, silenciado) por defecto del reproductor, de Ajustes.
-    Usa la configuracion ya cargada en la ventana principal; si no la
-    encuentra, la lee del disco."""
-    cfg, w = None, parent
+def _apply_viewer_size(win, key, cfg):
+    """Reproductor / visor de fotos: botones de maximizar y el tamaño elegido
+    en Ajustes (o el que tenia la ultima vez)."""
+    enable_min_max_buttons(win)
+    restore_window(win, key, cfg, cfg.get("viewer_size", "remember"))
+
+
+def _remember_viewer_size(win, key):
+    cfg = _app_config(win.parentWidget())
+    if remember_window(win, key, cfg):
+        try:
+            save_config(cfg)
+        except Exception:
+            pass
+
+
+def _app_config(widget):
+    """La configuracion ya cargada en la ventana principal (el mismo dict: lo
+    que se cambie aca no se pierde cuando ella guarde); si no la encuentra,
+    la lee del disco."""
+    w = widget
     while w is not None:
         if isinstance(getattr(w, "config", None), dict):
-            cfg = w.config
-            break
+            return w.config
         w = w.parent()
-    if cfg is None:
-        try:
-            cfg = load_config()
-        except Exception:
-            cfg = {}
+    try:
+        return load_config()
+    except Exception:
+        return {}
+
+
+def _player_audio_defaults(parent):
+    """(volumen 0-100, silenciado) por defecto del reproductor, de Ajustes."""
+    cfg = _app_config(parent)
     try:
         vol = int(cfg.get("player_volume", 80))
     except (TypeError, ValueError):
@@ -109,6 +134,58 @@ class _BusyRing(QWidget):
         p.end()
 
 
+class _MapWindow(QWidget):
+    """Ventana aparte para el mapa del reproductor (se puede llevar a otro
+    monitor). Queda abierta al pasar de video: mientras se lee el GPS del
+    siguiente muestra un aviso. Cerrarla solo oculta el mapa; las teclas
+    (espacio, flechas...) siguen manejando el reproductor."""
+    closed = Signal()
+
+    def __init__(self, player):
+        super().__init__(player, Qt.WindowType.Window)
+        self.player = player
+        self._really_close = False
+        self.setStyleSheet(f"QWidget {{ background: #1c1e29; color: #fff; font-family: {FONT_STACK}; }}")
+        self.lay = QVBoxLayout(self)
+        self.lay.setContentsMargins(0, 0, 0, 0)
+        self.note = QLabel()
+        self.note.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.note.setWordWrap(True)          # un aviso largo no tiene que agrandar la ventana
+        self.note.setContentsMargins(24, 0, 24, 0)
+        self.note.setStyleSheet("font-size: 14px; color: rgba(255,255,255,0.7);")
+        self.lay.addWidget(self.note)
+        self.panel = None
+
+    def set_panel(self, panel):
+        self.panel = panel
+        self.note.hide()
+        self.lay.addWidget(panel)
+        panel.show()
+
+    def release_panel(self):
+        """Saca el mapa de la ventana (para volver a ponerlo en el reproductor)."""
+        panel, self.panel = self.panel, None
+        if panel is not None:
+            self.lay.removeWidget(panel)
+        return panel
+
+    def show_note(self, text):
+        self.panel = None
+        self.note.setText(text)
+        self.note.show()
+
+    def keyPressEvent(self, event):
+        self.player.keyPressEvent(event)
+
+    def closeEvent(self, event):
+        if self._really_close:
+            super().closeEvent(event)
+            return
+        event.ignore()
+        self.hide()
+        self.closed.emit()
+
+
 class VideoPlayerDialog(QDialog):
     """Eigener Video-Player mit richtiger Steuerleiste (Play/Pause, Zeit-
     Anzeige, Sucher-Slider, Lautstaerke) - oeffnet sich beim Anklicken eines
@@ -141,7 +218,7 @@ class VideoPlayerDialog(QDialog):
         self.view_mode = "flat"
         self._capture_sink = None
         self.setWindowTitle(os.path.basename(path))
-        self.resize(960, 600)
+        _apply_viewer_size(self, "player", _app_config(parent))
         self.setStyleSheet(f"QDialog {{ background: #000; }} * {{ color: #fff; font-family: {FONT_STACK}; }}")
 
         layout = QVBoxLayout(self)
@@ -158,6 +235,9 @@ class VideoPlayerDialog(QDialog):
         self.split.setStyleSheet("QSplitter::handle { background: #222; width: 3px; }")
         self.split.addWidget(self.stack)
         self.map_panel = None
+        self._map_window = None
+        self._map_reopen = False          # mapa aparte abierto al cambiar de video: reabrirlo con el GPS nuevo
+        self._map_detached = bool(_app_config(parent).get("map_detached", False))
         self._track = None
         layout.addWidget(self.split, 1)
         self.video_widget.mouseDoubleClickEvent = lambda e: self.toggle_fullscreen()
@@ -373,12 +453,19 @@ class VideoPlayerDialog(QDialog):
         self._auto_mode_detected = False
         if self.view_mode == "360":
             self.set_360_mode(False)
+        win = self._map_window
+        self._map_reopen = bool(self._map_detached and win is not None and win.isVisible())
         if self.map_panel is not None:
+            if win is not None and win.panel is self.map_panel:
+                win.release_panel()
             self.map_panel.shutdown()
             self.map_panel.hide()
             self.map_panel.setParent(None)
             self.map_panel.deleteLater()
             self.map_panel = None
+        if self._map_reopen:
+            win.show_note(tr(self.lang, "gps_reading"))
+            win.setWindowTitle(tr(self.lang, "map_window_title", name=os.path.basename(path)))
         self._track = None
         self.btn_map.setChecked(False)
         self.btn_map.setEnabled(False)
@@ -499,15 +586,23 @@ class VideoPlayerDialog(QDialog):
         if token != self._load_gen:
             return                       # llego tarde: es del video anterior
         self._gps_ring.stop()
+        reopen, self._map_reopen = self._map_reopen, False
         if track and track.get("points"):
             self._track = track
             self.btn_map.setEnabled(True)
             self.btn_map.setToolTip(tr(self.lang, "map_toggle"))
+            if reopen:
+                self.btn_map.setChecked(True)
+                self.toggle_map(sound=False)
         else:
-            self.btn_map.setToolTip(tr(self.lang, "gps_nofix" if track and track.get("nofix") else "gps_none"))
+            msg = tr(self.lang, "gps_nofix" if track and track.get("nofix") else "gps_none")
+            self.btn_map.setToolTip(msg)
+            if reopen and self._map_window is not None:
+                self._map_window.show_note(msg)     # la ventana queda: el proximo video puede tener GPS
 
-    def toggle_map(self):
-        SoundManager.play_click()
+    def toggle_map(self, sound=True):
+        if sound:
+            SoundManager.play_click()
         if self.map_panel is None and self._track:
             from ..ui.map import TileMapWidget
             accent = getattr(self.window().parent(), "get_current_theme_color", lambda: "#00f2fe")() \
@@ -516,10 +611,79 @@ class VideoPlayerDialog(QDialog):
                                            lang=getattr(self, "lang", "es"), cum=self._track.get("cum"))
             self.map_panel.fracs = self._track.get("fracs")     # mismo momento que el grafico
             self.map_panel.setMinimumSize(320, 240)
+            self._btn_detach = self.map_panel.add_tool_button("⧉", "", self.toggle_map_detached)
+            self._update_detach_button()
+            self._place_map_panel()
+        if self.map_panel is None:
+            return
+        on = self.btn_map.isChecked()
+        if self._map_detached:
+            win = self._ensure_map_window()
+            if on:
+                win.show()
+                win.raise_()
+            else:
+                win.hide()
+        else:
+            self.map_panel.setVisible(on)
+        if on and self.player.duration():
+            self.map_panel.set_progress(self.player.position() / self.player.duration())
+
+    # ---- mapa en otra ventana
+    def _ensure_map_window(self):
+        if self._map_window is None:
+            self._map_window = _MapWindow(self)
+            self._map_window.closed.connect(self._on_map_window_closed)
+            restore_window(self._map_window, "map", _app_config(self), default_fraction=0.45)
+        self._map_window.setWindowTitle(tr(self.lang, "map_window_title", name=os.path.basename(self._path)))
+        return self._map_window
+
+    def _place_map_panel(self):
+        """Pone el mapa donde corresponde: al costado del video o en su ventana."""
+        if self._map_detached:
+            win = self._ensure_map_window()
+            if win.panel is not self.map_panel:
+                win.set_panel(self.map_panel)
+        else:
+            if self._map_window is not None and self._map_window.panel is self.map_panel:
+                self._map_window.release_panel()
+                self._map_window.hide()
             self.split.addWidget(self.map_panel)
             self.split.setSizes([max(400, self.width() - 420), 420])
+
+    def toggle_map_detached(self):
+        SoundManager.play_click()
+        self._map_detached = not self._map_detached
+        cfg = _app_config(self)
+        cfg["map_detached"] = self._map_detached
+        self._save_map_window_geometry(cfg)
         if self.map_panel is not None:
-            self.map_panel.setVisible(self.btn_map.isChecked())
+            self._place_map_panel()
+            self._update_detach_button()
+            self.btn_map.setChecked(True)
+            self.toggle_map(sound=False)
+        else:
+            save_config(cfg)
+
+    def _update_detach_button(self):
+        b = getattr(self, "_btn_detach", None)
+        if b is not None:
+            b.setText("⇲" if self._map_detached else "⧉")
+            b.setToolTip(tr(self.lang, "map_attach" if self._map_detached else "map_detach"))
+
+    def _on_map_window_closed(self):
+        self._save_map_window_geometry()
+        self._map_reopen = False
+        self.btn_map.setChecked(False)
+
+    def _save_map_window_geometry(self, cfg=None):
+        cfg = cfg if cfg is not None else _app_config(self)
+        if self._map_window is not None:
+            remember_window(self._map_window, "map", cfg)
+        try:
+            save_config(cfg)
+        except Exception:
+            pass
 
     def toggle_fullscreen(self):
         toggle_fullscreen(self)
@@ -670,7 +834,7 @@ class VideoPlayerDialog(QDialog):
     def _update_mute_icon(self):
         silent = self.audio.isMuted() or self.slider_volume.value() == 0
         self.btn_mute.setChecked(self.audio.isMuted())
-        self.btn_mute.setIcon(QIcon(emoji_icon("🔇" if silent else "🔊", 18)))
+        self.btn_mute.setIcon(crossed_emoji_icon("🔊", 18) if silent else emoji_icon("🔊", 18))
         self.btn_mute.setToolTip(tr(self.lang, "player_unmute" if self.audio.isMuted() else "player_mute"))
 
     def _change_volume(self, delta):
@@ -722,10 +886,21 @@ class VideoPlayerDialog(QDialog):
         else:
             super().keyPressEvent(event)
 
+    def hideEvent(self, event):
+        # cerrar con la X, con Esc o desde el codigo: siempre pasa por aca
+        if not event.spontaneous():
+            _remember_viewer_size(self, "player")
+        super().hideEvent(event)
+
     def closeEvent(self, event):
         self.player.stop()
         if self.map_panel is not None:
             self.map_panel.shutdown()
+        if self._map_window is not None:
+            if self._map_window.isVisible():
+                self._save_map_window_geometry()
+            self._map_window._really_close = True
+            self._map_window.close()
         super().closeEvent(event)
 
 
@@ -837,7 +1012,7 @@ class ImageViewerDialog(QDialog):
         self._path = path
         self._cache = {}            # ruta -> QImage ya decodificada (la actual y las vecinas)
         self._loading = set()
-        self.resize(1000, 700)
+        _apply_viewer_size(self, "image", _app_config(parent))
         self.setStyleSheet("background: #000;")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -960,6 +1135,11 @@ class ImageViewerDialog(QDialog):
     def toggle_fullscreen(self):
         toggle_fullscreen(self)
         self.btn_full.setIcon(fullscreen_icon(leave=self.isFullScreen()))
+
+    def hideEvent(self, event):
+        if not event.spontaneous():
+            _remember_viewer_size(self, "image")
+        super().hideEvent(event)
 
     def keyPressEvent(self, event):
         k = event.key()

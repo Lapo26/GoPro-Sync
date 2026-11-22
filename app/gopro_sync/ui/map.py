@@ -207,6 +207,21 @@ class TileMapWidget(QWidget):
         self._layer_btn.clicked.connect(self._show_layer_menu)
         self._zoom_btns.append(self._layer_btn)
 
+    def add_tool_button(self, text, tooltip, fn):
+        """Otro boton en la columna de la derecha (p. ej. el reproductor agrega
+        el de abrir el mapa en otra ventana). Devuelve el boton."""
+        b = QToolButton(self)
+        b.setText(text)
+        b.setToolTip(tooltip)
+        b.setFixedSize(34, 34)
+        b.setCursor(Qt.CursorShape.PointingHandCursor)
+        b.setStyleSheet(self._layer_btn.styleSheet())
+        b.clicked.connect(fn)
+        self._zoom_btns.append(b)
+        b.move(self.width() - 44, 10 + (len(self._zoom_btns) - 1) * 40)
+        b.show()
+        return b
+
     # ---- coordenadas
     @staticmethod
     def _world(lat, lon, z):
