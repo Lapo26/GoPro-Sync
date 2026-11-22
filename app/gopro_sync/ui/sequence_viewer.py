@@ -12,7 +12,8 @@ from ..sound import SoundManager
 from ..winshell import move_to_recycle_bin
 from ..ui.graphics import emoji_icon
 from ..ui.widgets import show_toast
-from ..ui.viewers import ImageViewerDialog, SeekSlider, fullscreen_icon, toggle_fullscreen
+from ..ui.viewers import (ImageViewerDialog, SeekSlider, _app_config, _apply_viewer_size, _remember_viewer_size,
+                          fullscreen_icon, toggle_fullscreen)
 
 
 class FrameLoader(QThread):
@@ -158,11 +159,13 @@ class SequenceViewerDialog(QDialog):
         self._pool = ThreadPoolExecutor(max_workers=3)
         self._inflight = set()
         self._dec_gen = 0
+        self._closed = False          # ya se cerro: ningun temporizador pendiente decodifica mas
         self._bridge = _Bridge()
         self._bridge.ready.connect(self._on_decoded)
         self.setWindowTitle(tr(lang, "seq_title_burst" if self.burst else "seq_title_timelapse",
                                g=seq["group"], n=len(self.frames)))
-        self.resize(1100, 760)
+        # como el reproductor y el visor de fotos: maximizable, tamaño recordado / el de Ajustes
+        _apply_viewer_size(self, "sequence", _app_config(parent))
         self.setStyleSheet(
             f"QDialog {{ background: #000; }} * {{ color: #fff; font-family: {FONT_STACK}; }}"
             " QLabel { background: transparent; }"
@@ -318,6 +321,8 @@ class SequenceViewerDialog(QDialog):
         return [j for j in ahead if 0 <= j < n]
 
     def _prefetch(self):
+        if self._closed:
+            return
         want = self._window()
         keep = set(want) | {self.index, max(0, self.index - 1)}
         for k in list(self._decoded):
@@ -452,6 +457,11 @@ class SequenceViewerDialog(QDialog):
         toggle_fullscreen(self)
         self.btn_full.setIcon(fullscreen_icon(leave=self.isFullScreen()))
 
+    def hideEvent(self, event):
+        if not event.spontaneous():
+            _remember_viewer_size(self, "sequence")
+        super().hideEvent(event)
+
     def keyPressEvent(self, event):
         k = event.key()
         if k == Qt.Key.Key_Space:
@@ -479,6 +489,7 @@ class SequenceViewerDialog(QDialog):
             QTimer.singleShot(0, lambda: self.show_frame(self.index))
 
     def done(self, r):
+        self._closed = True
         self.timer.stop()
         self._dec_gen += 1
         self._pool.shutdown(wait=False, cancel_futures=True)
