@@ -13,6 +13,7 @@ from ..gps_index import fast_track
 from ..media import _read_moov
 from ..workers import ScanThread
 from ..ui.graphics import crossed_emoji_icon, emoji_icon
+from ..ui.theme import BAR, current_accent, lighter, rgba, round_button_css
 from ..ui.widgets import VideoFrameView, save_captured_photo, show_toast
 from ..ui.window_size import enable_min_max_buttons, remember_window, restore_window
 
@@ -221,6 +222,7 @@ class VideoPlayerDialog(QDialog):
         self.setWindowTitle(os.path.basename(path))
         _apply_viewer_size(self, "player", _app_config(parent))
         self.setStyleSheet(f"QDialog {{ background: #000; }} * {{ color: #fff; font-family: {FONT_STACK}; }}")
+        self.accent = current_accent(parent)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -244,7 +246,7 @@ class VideoPlayerDialog(QDialog):
         self.video_widget.mouseDoubleClickEvent = lambda e: self.toggle_fullscreen()
 
         controls = QWidget()
-        controls.setStyleSheet("background: #15151c;")
+        controls.setStyleSheet(f"background: {BAR};")
         c_layout = QHBoxLayout(controls)
         c_layout.setContentsMargins(16, 10, 16, 10)
         c_layout.setSpacing(12)
@@ -259,12 +261,8 @@ class VideoPlayerDialog(QDialog):
             btn.setFixedSize(38, 38)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.setToolTip(tooltip)
-            btn.setStyleSheet(
-                "QPushButton { background: rgba(255,255,255,0.1); border-radius: 19px; font-size: 15px; border: none; } "
-                "QPushButton:hover { background: rgba(255,255,255,0.2); } "
-                "QPushButton:checked { background: rgba(0,242,254,0.35); } "
-                "QPushButton:disabled { background: rgba(255,255,255,0.04); }"
-            )
+            btn.setStyleSheet(round_button_css(self.accent)
+                              + " QPushButton:disabled { background: rgba(255,255,255,0.04); }")
             return btn
 
         self.btn_prev = _round_btn("⏮", tr(self.lang, "nav_prev_video"))
@@ -351,9 +349,9 @@ class VideoPlayerDialog(QDialog):
             " QPushButton { background: rgba(255,255,255,0.1); border: none; border-radius: 12px; padding: 6px 14px;"
             " font-size: 12px; font-weight: 600; } QPushButton:hover { background: rgba(255,255,255,0.2); }"
             " QPushButton:disabled { color: rgba(255,255,255,0.35); background: rgba(255,255,255,0.04); }"
-            " QPushButton#primary { background: #00b4d8; color: #0d0d12; font-weight: 800; }"
-            " QPushButton#primary:hover { background: #22c8ea; }"
-            " QPushButton#primary:disabled { background: rgba(0,180,216,0.25); color: rgba(13,13,18,0.6); }")
+            f" QPushButton#primary {{ background: {self.accent}; color: #0d0d12; font-weight: 800; }}"
+            f" QPushButton#primary:hover {{ background: {lighter(self.accent)}; }}"
+            f" QPushButton#primary:disabled {{ background: {rgba(self.accent, 0.25)}; color: rgba(13,13,18,0.6); }}")
         cb = QHBoxLayout(self.clip_bar)
         cb.setContentsMargins(16, 8, 16, 8)
         cb.setSpacing(10)
@@ -606,8 +604,7 @@ class VideoPlayerDialog(QDialog):
             SoundManager.play_click()
         if self.map_panel is None and self._track:
             from ..ui.map import TileMapWidget
-            accent = getattr(self.window().parent(), "get_current_theme_color", lambda: "#00f2fe")() \
-                if self.parent() is not None else "#00f2fe"
+            accent = self.accent
             self.map_panel = TileMapWidget(self._track["points"], accent, self, elapsed=self._track.get("elapsed"),
                                            lang=getattr(self, "lang", "es"), cum=self._track.get("cum"))
             self.map_panel.fracs = self._track.get("fracs")     # mismo momento que el grafico
@@ -1100,11 +1097,7 @@ class ImageViewerDialog(QDialog):
                 pass
         if on and self.map_panel is None:
             from ..ui.map import PhotoMapWidget
-            accent = "#00f2fe"
-            main = self.parent().window() if self.parent() is not None else None
-            if main is not None and hasattr(main, "get_current_theme_color"):
-                accent = main.get_current_theme_color()
-            self.map_panel = PhotoMapWidget(accent, self, lang=self.lang)
+            self.map_panel = PhotoMapWidget(current_accent(self.parent()), self, lang=self.lang)
             self._map_note = QLabel(self.map_panel)
             self._map_note.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self._map_note.setStyleSheet("background: rgba(20,22,30,0.88); color: #fff; border-radius: 10px;"

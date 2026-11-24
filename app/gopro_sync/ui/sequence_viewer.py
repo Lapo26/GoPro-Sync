@@ -11,6 +11,7 @@ from ..i18n import tr
 from ..sound import SoundManager
 from ..winshell import move_to_recycle_bin
 from ..ui.graphics import emoji_icon
+from ..ui.theme import BAR, lighter, round_button_css
 from ..ui.widgets import show_toast
 from ..ui.viewers import (ImageViewerDialog, SeekSlider, _app_config, _apply_viewer_size, _remember_viewer_size,
                           fullscreen_icon, toggle_fullscreen)
@@ -173,8 +174,7 @@ class SequenceViewerDialog(QDialog):
             " font-size: 12px; font-weight: 600; } QPushButton#txt:hover { background: rgba(255,255,255,0.2); }"
             f" QPushButton#primary {{ background: {accent}; color: #0d0d12; border: none; border-radius: 14px;"
             " padding: 7px 16px; font-size: 12px; font-weight: 800; }"
-            " QComboBox { background: rgba(255,255,255,0.1); border: none; border-radius: 10px; padding: 5px 10px; }"
-            " QComboBox QAbstractItemView { background: #23232b; selection-background-color: rgba(255,255,255,0.16); }"
+            f" QPushButton#primary:hover {{ background: {lighter(accent)}; }}"
             " QListWidget { background: #0f0f15; border: none; }"
             " QScrollBar:horizontal { background: #0f0f15; height: 10px; margin: 0; }"
             " QScrollBar::handle:horizontal { background: rgba(255,255,255,0.22); border-radius: 5px; min-width: 40px; }"
@@ -216,7 +216,7 @@ class SequenceViewerDialog(QDialog):
         controls = QWidget()
         controls.setObjectName("bar")
         controls.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        controls.setStyleSheet("QWidget#bar { background: #15151c; }")
+        controls.setStyleSheet(f"QWidget#bar {{ background: {BAR}; }}")
         c = QHBoxLayout(controls)
         c.setContentsMargins(16, 10, 16, 10)
         c.setSpacing(10)
@@ -228,9 +228,7 @@ class SequenceViewerDialog(QDialog):
             b.setFixedSize(38, 38)
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.setToolTip(tip)
-            b.setStyleSheet("QPushButton { background: rgba(255,255,255,0.1); border-radius: 19px; border: none; }"
-                            " QPushButton:hover { background: rgba(255,255,255,0.2); }"
-                            " QPushButton:checked { background: rgba(0,242,254,0.35); }")
+            b.setStyleSheet(round_button_css(accent))
             return b
 
         self.btn_prev = round_btn("⏮", tr(lang, "seq_prev_frame"))

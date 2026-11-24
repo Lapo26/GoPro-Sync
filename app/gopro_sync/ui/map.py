@@ -7,12 +7,13 @@ import time
 from PySide6.QtCore import QPoint, QPointF, QRectF, QTimer, QUrl, Qt, Signal
 from PySide6.QtGui import QAction, QActionGroup, QColor, QDesktopServices, QImage, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QMenu, QPushButton, QToolButton, QVBoxLayout, QWidget
-from ..env import CACHE_DIR, FONT_STACK, load_config
+from ..env import CACHE_DIR, load_config
 from ..i18n import tr
 from ..gps_index import fast_track
 from ..media import cumulative_distance, read_mp4_info
 from ..workers import ScanThread
 from ..version import APP_VERSION
+from ..ui.theme import dialog_css
 
 # Mapas de fondo gratuitos, sin clave y de todo el mundo. {s} = subdominio para repartir las
 # descargas; "max" = ultimo zoom que tiene el servidor (mas alla se amplia
@@ -949,14 +950,7 @@ class GpsMapDialog(QDialog):
         self.map = None
         self.setWindowTitle(tr(lang, "gps_title", name=os.path.basename(path)))
         self.resize(1000, 720)
-        self.setStyleSheet(f"""
-            QDialog {{ background: #1c1e29; }}
-            QLabel {{ color: #fff; background: transparent; }}
-            * {{ font-family: {FONT_STACK}; }}
-            QPushButton {{ background: rgba(255,255,255,0.08); color: #fff; border: 1px solid rgba(255,255,255,0.14);
-                          border-radius: 10px; padding: 8px 16px; font-weight: 600; }}
-            QPushButton:hover {{ background: rgba(255,255,255,0.16); }}
-        """)
+        self.setStyleSheet(dialog_css(accent))
         self.lay = QVBoxLayout(self)
         self.lay.setContentsMargins(22, 18, 22, 16)
         self.lay.setSpacing(10)

@@ -24,6 +24,7 @@ from ..ui.thumbs import ThumbGridView
 from ..ui.viewers import ImageViewerDialog, VideoPlayerDialog
 from ..ui.map import GpsMapDialog
 from ..ui.dialogs import ConfirmDeleteDialog, MediaInfoDialog
+from ..ui.theme import current_accent, dialog_css
 
 class GalleryBase(QWidget):
     KIND = "picture"       # von Subklassen ueberschrieben: "video" oder "picture"
@@ -454,7 +455,7 @@ class GalleryBase(QWidget):
     def _pick_date_range(self):
         dlg = QDialog(self)
         dlg.setWindowTitle(tr(self.lang, "date_range_title"))
-        dlg.setStyleSheet("QDialog { background: #1c1e29; } QLabel { color: #fff; }")
+        dlg.setStyleSheet(dialog_css(current_accent(self)))
         lay = QVBoxLayout(dlg)
         row = QHBoxLayout()
         start = self.date_filter[0] if self.date_filter else datetime.now().strftime("%Y-01-01")

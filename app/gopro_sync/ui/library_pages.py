@@ -23,9 +23,7 @@ PAGE_BTN = ("QPushButton { background-color: rgba(255,255,255,0.07); border: 1px
             " border-radius: 10px; padding: 8px 16px; color: rgba(255,255,255,0.85); font-size: 13px; font-weight: 600; }"
             " QPushButton:hover { background-color: rgba(255,255,255,0.12); }"
             " QPushButton:disabled { color: rgba(255,255,255,0.35); }")
-COMBO = ("QComboBox { background: rgba(255,255,255,0.07); color: #fff; border: 1px solid rgba(255,255,255,0.14);"
-         " border-radius: 10px; padding: 7px 12px; min-width: 120px; }"
-         " QComboBox QAbstractItemView { background: #23232b; color: #fff; selection-background-color: rgba(255,255,255,0.16); }")
+COMBO = "QComboBox { min-width: 120px; }"      # el resto lo da el estilo general (ui/theme.py)
 
 
 def list_media(root, exts):

@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QToolTip, QWidget
 from ..i18n import tr
 from ..gps_index import fast_track
 from ..telemetry import chart_series
+from ..ui.theme import current_accent
 from ..workers import ScanThread
 
 HILIGHT_COLOR = "#ffd166"
@@ -210,11 +211,7 @@ class TelemetryExtras(QObject):
         self.path = None
         self.gen = 0
         self.track = None
-        accent = "#00f2fe"
-        try:
-            accent = player.parent().window().get_current_theme_color()
-        except Exception:
-            pass
+        accent = getattr(player, "accent", None) or current_accent(player)
         self.btn = round_btn("📈", tr(self.lang, "chart_toggle"))
         self.btn.setCheckable(True)
         self.btn.clicked.connect(self.toggle)

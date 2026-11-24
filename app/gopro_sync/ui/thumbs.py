@@ -16,6 +16,7 @@ from ..media import is_broken_mp4
 from ..fileops import MEDIA_EXTENSIONS_BY_MODE
 from ..videotools import ffmpeg_exe
 from ..ui.graphics import THUMB_H, THUMB_W, draw_play_badge, make_cover_thumbnail, screen_dpr
+from ..ui.theme import current_accent
 
 # Miniaturas de video: el primer cuadro con el ffmpeg incluido (el mismo que
 # usan unir/reparar). Antes se usaba OpenCV solo para esto: +140 MB en el
@@ -502,7 +503,7 @@ class ThumbGridView(QAbstractScrollArea):
         # Videos: ruta -> duracion ya formateada ("1:05"), abajo a la derecha
         self.durations = {}
         self._dur_font = None
-        self.accent = QColor("#00f2fe")
+        self.accent = QColor(current_accent(parent))
         self.header_font = QFont("Century Gothic")
         self.header_font.setPixelSize(13)
         self.header_font.setBold(True)

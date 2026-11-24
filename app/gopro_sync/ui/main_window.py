@@ -457,6 +457,10 @@ class MainWindow(HiLightActionsMixin, TrackExportMixin, QWidget):
 
     def update_sidebar_theme(self):
         c = self.get_current_theme_color()
+        apply_popup_style(c)
+        for page in (self.videos_page, self.pictures_page):
+            page.view.accent = QColor(c)
+            page.view.viewport().update()
         style = self.btn_style % c
         self.btn_nav_sync.setStyleSheet(style)
         self.btn_nav_videos.setStyleSheet(style)

@@ -477,6 +477,8 @@ def apply_popup_style(accent="#00f2fe"):
     c = QColor(accent)
     css = (APP_POPUP_STYLE.replace("ACCENT_SOFT", f"rgba({c.red()},{c.green()},{c.blue()},0.25)")
            .replace("ACCENT", c.name()))
+    from ..ui.theme import inputs_css
+    css += inputs_css(c.name())
     base = getattr(app, "_base_style", None)
     if base is None:
         base = app.styleSheet() or ""

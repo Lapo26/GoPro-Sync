@@ -9,9 +9,10 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QProgressBar, QPushButton, QVBoxLayout
 import sys
 from .version import APP_VERSION, GITHUB_REPO, UPDATE_SIGNER_SUBJECT
-from .env import FONT_STACK, IS_MAC, IS_WINDOWS, POWERSHELL_EXE, _hidden_startupinfo
+from .env import IS_MAC, IS_WINDOWS, POWERSHELL_EXE, _hidden_startupinfo
 from .i18n import _human_size, tr
 from .ui.widgets import show_toast
+from .ui.theme import dialog_css
 
 def _version_tuple(v):
     try:
@@ -191,18 +192,10 @@ class UpdateDialog(QDialog):
         self.setWindowTitle(tr(lang, "update_title"))
         self.setModal(True)
         self.setMinimumWidth(500)
-        self.setStyleSheet(f"""
-            QDialog {{ background: #1c1e29; }}
-            QLabel {{ color: #fff; background: transparent; }}
-            * {{ font-family: {FONT_STACK}; }}
-            QPushButton {{ background: rgba(255,255,255,0.08); color: #fff; border: 1px solid rgba(255,255,255,0.14);
-                          border-radius: 10px; padding: 8px 16px; font-weight: 600; }}
-            QPushButton:hover {{ background: rgba(255,255,255,0.16); }}
-            QPushButton#primary {{ background: {accent}; color: #0d0d12; border: none; font-weight: 800; }}
-            QPushButton#primary:disabled {{ background: rgba(255,255,255,0.12); color: rgba(255,255,255,0.4); }}
+        self.setStyleSheet(dialog_css(accent, f"""
             QProgressBar {{ background: rgba(255,255,255,0.08); border: none; border-radius: 6px; height: 10px; }}
             QProgressBar::chunk {{ background: {accent}; border-radius: 6px; }}
-        """)
+        """))
         lay = QVBoxLayout(self)
         lay.setContentsMargins(26, 22, 26, 20)
         lay.setSpacing(10)

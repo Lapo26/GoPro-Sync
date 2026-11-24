@@ -645,9 +645,7 @@ class GlobalMapPage(QWidget):
                           border-radius: 9px; padding: 7px 14px; font-size: 12px; font-weight: 600; }}
             QPushButton:hover {{ background: rgba(255,255,255,0.15); }}
             QPushButton:checked {{ background: rgba(255,255,255,0.22); border: 1px solid rgba(255,255,255,0.4); }}
-            QComboBox {{ background: rgba(255,255,255,0.07); color: #fff; border: 1px solid rgba(255,255,255,0.14);
-                        border-radius: 9px; padding: 6px 12px; font-size: 12px; }}
-            QComboBox QAbstractItemView {{ background: #1f2230; color: #fff; selection-background-color: rgba(255,255,255,0.15); }}
+            QComboBox {{ font-size: 12px; }}
             QListWidget {{ background: rgba(255,255,255,0.03); color: #fff; border: 1px solid rgba(255,255,255,0.08);
                           border-radius: 12px; padding: 6px; font-size: 12px; outline: none; }}
             QListWidget::item {{ padding: 5px 6px; border-radius: 6px; }}

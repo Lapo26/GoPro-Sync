@@ -4,26 +4,16 @@ import os
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QComboBox, QDialog, QDoubleSpinBox, QFileDialog, QGridLayout, QHBoxLayout, QLabel,
                                QLineEdit, QPushButton, QVBoxLayout)
-from ..env import FONT_STACK, _valid_start_dir
+from ..env import _valid_start_dir
 from ..i18n import tr, wrap_path
 from ..ui.widgets import ToggleSwitch
+from ..ui.theme import dialog_css
 
 
 def dialog_style(accent):
-    return f"""
-        QDialog {{ background: #1c1e29; }}
-        QLabel {{ color: #fff; background: transparent; }}
-        * {{ font-family: {FONT_STACK}; }}
-        QPushButton {{ background: rgba(255,255,255,0.08); color: #fff; border: 1px solid rgba(255,255,255,0.14);
-                      border-radius: 10px; padding: 8px 16px; font-weight: 600; }}
-        QPushButton:hover {{ background: rgba(255,255,255,0.16); }}
-        QPushButton:disabled {{ color: rgba(255,255,255,0.35); }}
-        QPushButton#primary {{ background: {accent}; color: #0d0d12; border: none; font-weight: 800; }}
-        QPushButton#primary:disabled {{ background: rgba(255,255,255,0.12); color: rgba(255,255,255,0.4); }}
-        QComboBox, QLineEdit, QDoubleSpinBox {{ background: rgba(255,255,255,0.08); color: #fff;
-                    border: 1px solid rgba(255,255,255,0.14); border-radius: 8px; padding: 6px 10px; min-width: 200px; }}
-        QComboBox QAbstractItemView {{ background: #23232b; color: #fff; selection-background-color: rgba(255,255,255,0.16); }}
-    """
+    return dialog_css(accent, """
+        QComboBox, QLineEdit, QAbstractSpinBox { min-width: 200px; }
+    """)
 
 
 class OptionsDialog(QDialog):

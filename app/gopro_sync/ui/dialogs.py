@@ -6,7 +6,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QApplication, QDialog, QFileDialog, QGridLayout, QHBoxLayout, QLabel, QListWidget,
                                QListWidgetItem, QPushButton, QScrollArea, QStackedWidget, QVBoxLayout, QWidget)
-from ..env import FONT_STACK, _safe_local_dir, _valid_start_dir
+from ..env import _safe_local_dir, _valid_start_dir
 from ..i18n import _human_size, tr, wrap_path
 from ..winshell import show_in_explorer
 from ..media import describe_media
@@ -14,6 +14,7 @@ from ..fileops import _is_same_or_inside, list_import_files, scan_backup, scan_i
 from ..workers import ScanThread
 from ..ui.widgets import ToggleSwitch, _make_language_buttons, show_toast
 from ..ui.thumbs import MixedThumbProvider, ThumbGridView
+from ..ui.theme import current_accent, dialog_css
 
 class ImportPickDialog(QDialog):
     """Elegir que archivos de la tarjeta/carpeta importar: miniaturas por
@@ -28,16 +29,7 @@ class ImportPickDialog(QDialog):
         self.setWindowTitle(tr(lang, "import_pick_title"))
         self.setModal(True)
         self.resize(1120, 760)
-        self.setStyleSheet(f"""
-            QDialog {{ background: #1c1e29; }}
-            QLabel {{ color: #fff; background: transparent; }}
-            * {{ font-family: {FONT_STACK}; }}
-            QPushButton {{ background: rgba(255,255,255,0.08); color: #fff; border: 1px solid rgba(255,255,255,0.14);
-                          border-radius: 10px; padding: 8px 16px; font-weight: 600; }}
-            QPushButton:hover {{ background: rgba(255,255,255,0.16); }}
-            QPushButton#primary {{ background: {accent}; color: #0d0d12; border: none; font-weight: 800; }}
-            QPushButton#primary:disabled {{ background: rgba(255,255,255,0.12); color: rgba(255,255,255,0.4); }}
-        """)
+        self.setStyleSheet(dialog_css(accent))
         lay = QVBoxLayout(self)
         lay.setContentsMargins(26, 22, 26, 20)
         lay.setSpacing(10)
@@ -149,16 +141,7 @@ class ImportConfirmDialog(QDialog):
         self.setWindowTitle(tr(lang, "import_confirm_title"))
         self.setModal(True)
         self.setMinimumWidth(560)
-        self.setStyleSheet(f"""
-            QDialog {{ background: #1c1e29; }}
-            QLabel {{ color: #fff; background: transparent; }}
-            * {{ font-family: {FONT_STACK}; }}
-            QPushButton {{ background: rgba(255,255,255,0.08); color: #fff; border: 1px solid rgba(255,255,255,0.14);
-                          border-radius: 10px; padding: 8px 16px; font-weight: 600; }}
-            QPushButton:hover {{ background: rgba(255,255,255,0.16); }}
-            QPushButton#primary {{ background: {accent}; color: #0d0d12; border: none; font-weight: 800; }}
-            QPushButton#primary:disabled {{ background: rgba(255,255,255,0.12); color: rgba(255,255,255,0.4); }}
-        """)
+        self.setStyleSheet(dialog_css(accent))
         lay = QVBoxLayout(self)
         lay.setContentsMargins(26, 22, 26, 20)
         lay.setSpacing(12)
@@ -285,19 +268,11 @@ class BackupDialog(QDialog):
         self.setWindowTitle(tr(lang, "backup_dialog_title"))
         self.setModal(True)
         self.setMinimumWidth(580)
-        self.setStyleSheet(f"""
-            QDialog {{ background: #1c1e29; }}
-            QLabel {{ color: #fff; background: transparent; }}
-            * {{ font-family: {FONT_STACK}; }}
-            QPushButton {{ background: rgba(255,255,255,0.08); color: #fff; border: 1px solid rgba(255,255,255,0.14);
-                          border-radius: 10px; padding: 8px 16px; font-weight: 600; }}
-            QPushButton:hover {{ background: rgba(255,255,255,0.16); }}
-            QPushButton#primary {{ background: {accent}; color: #0d0d12; border: none; font-weight: 800; }}
-            QPushButton#primary:disabled {{ background: rgba(255,255,255,0.12); color: rgba(255,255,255,0.4); }}
+        self.setStyleSheet(dialog_css(accent, f"""
             QProgressBar {{ background: rgba(255,255,255,0.08); border: none; border-radius: 8px; height: 16px;
-                           text-align: center; color: #fff; font-weight: 700; }}
+            text-align: center; color: #fff; font-weight: 700; }}
             QProgressBar::chunk {{ background: {accent}; border-radius: 8px; }}
-        """)
+        """))
         outer = QVBoxLayout(self)
         outer.setContentsMargins(26, 22, 26, 20)
         outer.setSpacing(12)
@@ -423,14 +398,7 @@ class ConfirmDeleteDialog(QDialog):
         self.setWindowTitle(tr(lang, "delete_title"))
         self.setModal(True)
         self.setMinimumWidth(460)
-        self.setStyleSheet(
-            f"QDialog {{ background: #1c1e29; }} QLabel {{ color: #fff; background: transparent; }}"
-            f" * {{ font-family: {FONT_STACK}; }}"
-            " QPushButton { background: rgba(255,255,255,0.08); color: #fff; border: 1px solid rgba(255,255,255,0.14);"
-            " border-radius: 10px; padding: 8px 18px; font-weight: 600; }"
-            " QPushButton:hover { background: rgba(255,255,255,0.16); }"
-            " QPushButton#danger { background: #e5484d; border: none; font-weight: 800; }"
-            " QPushButton#danger:hover { background: #f2555a; }")
+        self.setStyleSheet(dialog_css(current_accent(parent), "QPushButton { padding: 8px 18px; }"))
         lay = QVBoxLayout(self)
         lay.setContentsMargins(26, 22, 26, 20)
         lay.setSpacing(10)
@@ -468,14 +436,7 @@ class ConfirmQuitDialog(QDialog):
         self.setWindowTitle(tr(lang, "quit_busy_title"))
         self.setModal(True)
         self.setMinimumWidth(480)
-        self.setStyleSheet(
-            f"QDialog {{ background: #1c1e29; }} QLabel {{ color: #fff; background: transparent; }}"
-            f" * {{ font-family: {FONT_STACK}; }}"
-            " QPushButton { background: rgba(255,255,255,0.08); color: #fff; border: 1px solid rgba(255,255,255,0.14);"
-            " border-radius: 10px; padding: 8px 18px; font-weight: 600; }"
-            " QPushButton:hover { background: rgba(255,255,255,0.16); }"
-            " QPushButton#danger { background: #e5484d; border: none; font-weight: 800; }"
-            " QPushButton#danger:hover { background: #f2555a; }")
+        self.setStyleSheet(dialog_css(current_accent(parent), "QPushButton { padding: 8px 18px; }"))
         lay = QVBoxLayout(self)
         lay.setContentsMargins(26, 22, 26, 20)
         lay.setSpacing(10)
@@ -508,15 +469,7 @@ class MediaInfoDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle(tr(lang, "info_title"))
         self.setMinimumWidth(560)
-        self.setStyleSheet(f"""
-            QDialog {{ background: #1c1e29; }}
-            QLabel {{ color: #fff; background: transparent; }}
-            * {{ font-family: {FONT_STACK}; }}
-            QPushButton {{ background: rgba(255,255,255,0.08); color: #fff; border: 1px solid rgba(255,255,255,0.14);
-                          border-radius: 10px; padding: 8px 16px; font-weight: 600; }}
-            QPushButton:hover {{ background: rgba(255,255,255,0.16); }}
-            QPushButton#primary {{ background: {accent}; color: #0d0d12; border: none; font-weight: 800; }}
-        """)
+        self.setStyleSheet(dialog_css(accent))
         lay = QVBoxLayout(self)
         lay.setContentsMargins(26, 22, 26, 20)
         lay.setSpacing(6)
@@ -574,8 +527,7 @@ class LanguageDialog(QDialog):
         self.setWindowTitle("GoPro Sync Pro")
         self.setModal(True)
         self.setMinimumWidth(380)
-        self.setStyleSheet(f"QDialog {{ background: #1c1e29; }} QLabel {{ color: #fff; background: transparent; }}"
-                           f" * {{ font-family: {FONT_STACK}; }}")
+        self.setStyleSheet(dialog_css(accent))
         lay = QVBoxLayout(self)
         lay.setContentsMargins(28, 24, 28, 24)
         lay.setSpacing(12)
@@ -601,17 +553,7 @@ class JoinDialog(QDialog):
         self.setWindowTitle(tr(lang, "join_title"))
         self.setModal(True)
         self.setMinimumWidth(560)
-        self.setStyleSheet(f"""
-            QDialog {{ background: #1c1e29; }}
-            QLabel {{ color: #fff; background: transparent; }}
-            * {{ font-family: {FONT_STACK}; }}
-            QPushButton {{ background: rgba(255,255,255,0.08); color: #fff; border: 1px solid rgba(255,255,255,0.14);
-                          border-radius: 10px; padding: 8px 16px; font-weight: 600; }}
-            QPushButton:hover {{ background: rgba(255,255,255,0.16); }}
-            QPushButton#primary {{ background: {accent}; color: #0d0d12; border: none; font-weight: 800; }}
-            QPushButton#primary:disabled {{ background: rgba(255,255,255,0.12); color: rgba(255,255,255,0.4); }}
-            QScrollArea {{ border: none; background: transparent; }}
-        """)
+        self.setStyleSheet(dialog_css(accent))
         lay = QVBoxLayout(self)
         lay.setContentsMargins(26, 22, 26, 20)
         lay.setSpacing(10)
@@ -733,18 +675,7 @@ class SequenceExportDialog(QDialog):
         self.setWindowTitle(tr(lang, "seq_export_title"))
         self.setModal(True)
         self.setMinimumWidth(520)
-        self.setStyleSheet(f"""
-            QDialog {{ background: #1c1e29; }}
-            QLabel {{ color: #fff; background: transparent; }}
-            * {{ font-family: {FONT_STACK}; }}
-            QPushButton {{ background: rgba(255,255,255,0.08); color: #fff; border: 1px solid rgba(255,255,255,0.14);
-                          border-radius: 10px; padding: 8px 16px; font-weight: 600; }}
-            QPushButton:hover {{ background: rgba(255,255,255,0.16); }}
-            QPushButton#primary {{ background: {accent}; color: #0d0d12; border: none; font-weight: 800; }}
-            QComboBox {{ background: rgba(255,255,255,0.08); color: #fff; border: 1px solid rgba(255,255,255,0.14);
-                        border-radius: 8px; padding: 6px 10px; min-width: 220px; }}
-            QComboBox QAbstractItemView {{ background: #23232b; color: #fff; selection-background-color: rgba(255,255,255,0.16); }}
-        """)
+        self.setStyleSheet(dialog_css(accent, "QComboBox { min-width: 220px; }"))
         lay = QVBoxLayout(self)
         lay.setContentsMargins(26, 22, 26, 20)
         lay.setSpacing(10)
