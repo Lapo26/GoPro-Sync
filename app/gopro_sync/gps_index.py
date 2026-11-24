@@ -65,6 +65,11 @@ def connect(db_path):
     """)
     if ver is None or int(ver[0]) != SCHEMA_VERSION:
         conn.execute("INSERT OR REPLACE INTO meta VALUES ('schema', ?)", (str(SCHEMA_VERSION),))
+    if conn.execute("SELECT v FROM meta WHERE k='fix_gps_clock'").fetchone() is None:
+        # Una sola vez: videos con mas de una semana "grabada" (salto del reloj
+        # del GPS, ver media.clean_gps) se vuelven a leer en la proxima pasada.
+        conn.execute("DELETE FROM media WHERE kind='v' AND dur > 604800")
+        conn.execute("INSERT OR REPLACE INTO meta VALUES ('fix_gps_clock', '1')")
     conn.commit()
     return conn
 

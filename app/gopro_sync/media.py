@@ -665,9 +665,18 @@ def clean_gps(blocks, duration):
     # dura el video: ahi se usa la hora UTC que graba el GPS (GPSU).
     sec = (duration / len(blocks)) if duration else 1.0
     times = [b[3] for b in blocks if len(b) > 3 and b[3]]
-    real = (times[-1] - times[0]) if len(times) >= 2 else 0
-    if real > 0 and (not duration or real > duration * 1.5):
-        sec = real / max(1, len(blocks) - 1)
+    step = 0.0
+    if len(times) >= 2:
+        # Segundos entre muestras segun el reloj del GPS, sin los saltos del
+        # reloj (al arrancar sin señal puede marcar una fecha de hace años:
+        # antes eso daba "13 años grabados" y millones de km).
+        steps = sorted(b - a for a, b in zip(times, times[1:]) if b > a)
+        if steps:
+            typical = steps[len(steps) // 2]
+            normal = [s for s in steps if s <= typical * 10 + 1]
+            step = sum(normal) / len(normal)
+    if step > 0 and (not duration or step * max(1, len(blocks) - 1) > duration * 1.5):
+        sec = step
     ok = lambda f, d: d == 0 or d < 500
     min_fix = 3 if any(f >= 3 and ok(f, d) and pts for f, d, pts, *_ in blocks) else 2
     pts_out, speeds, kept_med, gap = [], [], None, 0

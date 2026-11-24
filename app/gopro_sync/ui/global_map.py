@@ -27,13 +27,14 @@ from collections import OrderedDict
 from datetime import datetime
 from PySide6.QtCore import QPointF, QProcess, QRectF, QTimer, Qt, Signal
 from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPolygonF
-from PySide6.QtWidgets import (QApplication, QComboBox, QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
+from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
                                QMenu, QProgressBar, QPushButton, QSplitter, QToolTip, QVBoxLayout, QWidget)
 from ..env import FONT_STACK
 from ..gps_index import decode_route, default_db_path, load_rows, progress_of, worker_command, worker_count
 from ..i18n import tr
 from ..sound import SoundManager
 from ..workers import ScanThread
+from .date_filter import date_button_text, show_date_menu
 from .graphics import emoji_icon
 from .map import TileMapWidget
 from .widgets import show_toast
@@ -635,7 +636,6 @@ class GlobalMapPage(QWidget):
         self._again = False
         self._indexing_meta = {}
         self._row_of = {}             # _Item -> QListWidgetItem
-        self._years = []
         self._list_dirty = False
 
         self.setStyleSheet(f"""
@@ -645,7 +645,6 @@ class GlobalMapPage(QWidget):
                           border-radius: 9px; padding: 7px 14px; font-size: 12px; font-weight: 600; }}
             QPushButton:hover {{ background: rgba(255,255,255,0.15); }}
             QPushButton:checked {{ background: rgba(255,255,255,0.22); border: 1px solid rgba(255,255,255,0.4); }}
-            QComboBox {{ font-size: 12px; }}
             QListWidget {{ background: rgba(255,255,255,0.03); color: #fff; border: 1px solid rgba(255,255,255,0.08);
                           border-radius: 12px; padding: 6px; font-size: 12px; outline: none; }}
             QListWidget::item {{ padding: 5px 6px; border-radius: 6px; }}
@@ -672,8 +671,12 @@ class GlobalMapPage(QWidget):
         head.addWidget(self.lbl_title)
         head.addSpacing(8)
         head.addWidget(self.lbl_stats, 1)
-        self.cmb_year = QComboBox()
-        self.cmb_year.currentIndexChanged.connect(lambda _i: self._apply_filter())
+        # mismas fechas que en las galerias (todas / hoy / 7 / 30 dias / año / rango)
+        self.date_filter = None
+        self._date_key, self._date_label = "date_all", None
+        self.btn_date = QPushButton()
+        self.btn_date.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_date.clicked.connect(self._show_date_menu)
         self.btn_videos = QPushButton()
         self.btn_photos = QPushButton()
         for b, ch in ((self.btn_videos, "🎬"), (self.btn_photos, "📷")):
@@ -684,7 +687,7 @@ class GlobalMapPage(QWidget):
         self.btn_refresh = QPushButton()
         self.btn_refresh.setIcon(emoji_icon("🔄", 16))
         self.btn_refresh.clicked.connect(lambda: (SoundManager.play_click(), self.start_indexing()))
-        for w in (self.cmb_year, self.btn_videos, self.btn_photos, self.btn_refresh):
+        for w in (self.btn_date, self.btn_videos, self.btn_photos, self.btn_refresh):
             head.addWidget(w)
         lay.addLayout(head)
 
@@ -780,7 +783,7 @@ class GlobalMapPage(QWidget):
         self.btn_videos.setText(tr(lang, "gmap_videos"))
         self.btn_photos.setText(tr(lang, "gmap_photos"))
         self.btn_refresh.setToolTip(tr(lang, "gmap_refresh"))
-        self._fill_years()
+        self.btn_date.setText(date_button_text(lang, self._date_key, self._date_label))
         self._update_stats()
         self._update_progress()
         self._update_note()
@@ -934,7 +937,6 @@ class GlobalMapPage(QWidget):
             self.all[it.key] = it
         self._seq = max(self._seq, last or 0)
         if rows:
-            self._fill_years()
             self._apply_filter(rebuild_list=False)
             if not self._procs:
                 self._rebuild_list()
@@ -942,26 +944,26 @@ class GlobalMapPage(QWidget):
                 self.list_timer.start()      # mientras llegan datos, cada tanto
 
     # ---- filtros
-    def _fill_years(self):
-        years = sorted({it.day.year for it in self.all.values() if it.day}, reverse=True)
-        if years == self._years and self.cmb_year.count():
-            return
-        cur = self.cmb_year.currentData()
-        self._years = years
-        self.cmb_year.blockSignals(True)
-        self.cmb_year.clear()
-        self.cmb_year.addItem(tr(self.lang, "gmap_all_years"), None)
-        for y in years:
-            self.cmb_year.addItem(str(y), y)
-        idx = self.cmb_year.findData(cur)
-        self.cmb_year.setCurrentIndex(max(0, idx))
-        self.cmb_year.blockSignals(False)
+    def _years(self):
+        return sorted({it.day.year for it in self.all.values() if it.day}, reverse=True)
+
+    def _show_date_menu(self):
+        SoundManager.play_click()
+        show_date_menu(self, self.btn_date, self.lang, self._years(), self.date_filter, self._set_date_filter)
+
+    def _set_date_filter(self, rng, key, label):
+        self.date_filter = rng
+        self._date_key, self._date_label = key, label
+        self.btn_date.setText(date_button_text(self.lang, key, label))
+        self._apply_filter()
 
     def _visible(self):
-        year = self.cmb_year.currentData()
+        rng = self.date_filter
+        if rng:
+            lo, hi = (datetime.strptime(x, "%Y-%m-%d").date() for x in rng)
         kinds = {k for k, b in (("v", self.btn_videos), ("p", self.btn_photos)) if b.isChecked()}
         out = [it for it in self.all.values()
-               if it.kind in kinds and (year is None or (it.day and it.day.year == year))]
+               if it.kind in kinds and (not rng or (it.day and lo <= it.day <= hi))]
         out.sort(key=lambda i: i.t)
         return out
 
@@ -977,9 +979,7 @@ class GlobalMapPage(QWidget):
     def _update_stats(self, items=None):
         items = self._visible() if items is None else items
         nv = sum(1 for i in items if i.kind == "v")
-        km = sum(i.dist or 0 for i in items if i.kind == "v")
-        np_ = len(items) - nv
-        self.lbl_stats.setText(tr(self.lang, "gmap_stats", videos=nv, km=_fmt_km(km), photos=np_))
+        self.lbl_stats.setText(tr(self.lang, "gmap_stats", videos=nv, photos=len(items) - nv))
 
     def _update_progress(self):
         meta = self._indexing_meta if self._procs else {}

@@ -2,9 +2,8 @@
 import os
 import re
 from datetime import datetime
-from datetime import timedelta
-from PySide6.QtCore import QDate, QTimer, Qt
-from PySide6.QtWidgets import QFrame, QApplication, QDateEdit, QDialog, QHBoxLayout, QLabel, QMenu, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtCore import QTimer, Qt
+from PySide6.QtWidgets import QFrame, QApplication, QDialog, QHBoxLayout, QLabel, QMenu, QPushButton, QVBoxLayout, QWidget
 from ..i18n import _human_size, short_path, tr
 from ..winshell import move_to_recycle_bin, show_in_explorer
 from ..sound import SoundManager
@@ -24,7 +23,7 @@ from ..ui.thumbs import ThumbGridView
 from ..ui.viewers import ImageViewerDialog, VideoPlayerDialog
 from ..ui.map import GpsMapDialog
 from ..ui.dialogs import ConfirmDeleteDialog, MediaInfoDialog
-from ..ui.theme import current_accent, dialog_css
+from ..ui.date_filter import pick_date_range, show_date_menu
 
 class GalleryBase(QWidget):
     KIND = "picture"       # von Subklassen ueberschrieben: "video" oder "picture"
@@ -432,54 +431,13 @@ class GalleryBase(QWidget):
         self.refresh()
 
     def _show_date_menu(self):
-        today = datetime.now().date()
-        fmt = lambda d: d.strftime("%Y-%m-%d")
-        menu = QMenu(self)
-        menu.addAction(tr(self.lang, "date_all"), lambda: self._set_date_filter(None, "date_all"))
-        menu.addAction(tr(self.lang, "date_today"), lambda: self._set_date_filter((fmt(today), fmt(today)), "date_today"))
-        menu.addAction(tr(self.lang, "date_7"),
-                       lambda: self._set_date_filter((fmt(today - timedelta(days=6)), fmt(today)), "date_7"))
-        menu.addAction(tr(self.lang, "date_30"),
-                       lambda: self._set_date_filter((fmt(today - timedelta(days=29)), fmt(today)), "date_30"))
-        menu.addAction(tr(self.lang, "date_this_year"),
-                       lambda: self._set_date_filter((f"{today.year}-01-01", f"{today.year}-12-31"), "date_this_year"))
-        years = self._available_years()
-        if years:
-            menu.addSeparator()
-            for y in years:
-                menu.addAction(y, lambda y=y: self._set_date_filter((f"{y}-01-01", f"{y}-12-31"), None, y))
-        menu.addSeparator()
-        menu.addAction(tr(self.lang, "date_custom"), self._pick_date_range)
-        menu.exec(self.btn_date.mapToGlobal(self.btn_date.rect().bottomLeft()))
+        show_date_menu(self, self.btn_date, self.lang, self._available_years(), self.date_filter,
+                       lambda rng, key, label: self._set_date_filter(rng, key, label))
 
     def _pick_date_range(self):
-        dlg = QDialog(self)
-        dlg.setWindowTitle(tr(self.lang, "date_range_title"))
-        dlg.setStyleSheet(dialog_css(current_accent(self)))
-        lay = QVBoxLayout(dlg)
-        row = QHBoxLayout()
-        start = self.date_filter[0] if self.date_filter else datetime.now().strftime("%Y-01-01")
-        end = self.date_filter[1] if self.date_filter else datetime.now().strftime("%Y-%m-%d")
-        d_from = QDateEdit(QDate.fromString(start, "yyyy-MM-dd"))
-        d_to = QDateEdit(QDate.fromString(end, "yyyy-MM-dd"))
-        for w in (d_from, d_to):
-            w.setCalendarPopup(True)
-            w.setDisplayFormat("dd/MM/yyyy")
-        row.addWidget(QLabel(tr(self.lang, "date_from")))
-        row.addWidget(d_from)
-        row.addWidget(QLabel(tr(self.lang, "date_to")))
-        row.addWidget(d_to)
-        lay.addLayout(row)
-        ok = QPushButton(tr(self.lang, "date_apply"))
-        ok.clicked.connect(dlg.accept)
-        lay.addWidget(ok, alignment=Qt.AlignmentFlag.AlignRight)
-        if dlg.exec():
-            a, b = d_from.date().toString("yyyy-MM-dd"), d_to.date().toString("yyyy-MM-dd")
-            if a > b:
-                a, b = b, a
-            label = f"{d_from.date().toString('dd/MM/yyyy')} – {d_to.date().toString('dd/MM/yyyy')}" \
-                if a <= b else ""
-            self._set_date_filter((a, b), None, label)
+        res = pick_date_range(self, self.lang, self.date_filter)
+        if res is not None:
+            self._set_date_filter(res[0], None, res[1])
 
     def _mtime_for_path(self, path):
         cached = getattr(self, "_mtime_cache", {}).get(path)
