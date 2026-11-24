@@ -1,6 +1,6 @@
 """Reproductor de video y visor de fotos."""
 import os
-from PySide6.QtCore import QPointF, QRectF, QSize, QTimer, QUrl, Qt, Signal
+from PySide6.QtCore import QEvent, QPoint, QPointF, QRectF, QSize, QTimer, QUrl, Qt, Signal
 from PySide6.QtGui import QColor, QIcon, QImageReader, QPainter, QPen, QPixmap
 from PySide6.QtMultimedia import QAudioOutput, QMediaMetaData, QMediaPlayer, QVideoSink
 from PySide6.QtMultimediaWidgets import QVideoWidget
@@ -1040,6 +1040,9 @@ class ImageViewerDialog(QDialog):
         self.view.mouseDoubleClickEvent = lambda event: self._fit_to_view()
         self.split.addWidget(self.view)
         layout.addWidget(self.split)
+        # los botones van sobre la foto: se reacomodan cada vez que cambia su
+        # lugar (abrir/cerrar el mapa no cambia el tamano de la ventana)
+        self.view.installEventFilter(self)
 
         # Boton de pantalla completa sobre la foto (arriba a la derecha); F11 o F tambien.
         self.btn_full = QPushButton(self)
@@ -1220,9 +1223,17 @@ class ImageViewerDialog(QDialog):
         super().resizeEvent(event)
         self._place_overlays()
 
+    def eventFilter(self, obj, event):
+        if obj is getattr(self, "view", None) and event.type() in (QEvent.Type.Resize, QEvent.Type.Move):
+            self._place_overlays()
+        return super().eventFilter(obj, event)
+
     def _place_overlays(self):
         """Botones sobre la foto (no sobre el mapa)."""
-        vx, vw, h = self.view.x(), self.view.width(), self.height()
+        if not hasattr(self, "lbl_pos"):
+            return                              # todavia armando la ventana
+        vx = self.view.mapTo(self, QPoint(0, 0)).x()     # el lugar real de la foto en la ventana
+        vw, h = self.view.width(), self.height()
         self.btn_full.move(vx + vw - 50, 12)
         self.btn_map.move(vx + vw - 96, 12)
         y = (h - 48) // 2

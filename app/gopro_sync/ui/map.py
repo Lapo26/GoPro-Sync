@@ -875,6 +875,7 @@ class PhotoMapWidget(TileMapWidget):
     """Mapa del visor de fotos: la foto que se ve (marca blanca) y las demas
     fotos de ese dia con GPS (puntos). Sin linea ni telemetria."""
     PHOTO_COLOR = "#ffb347"
+    FIT_MARGIN = 60                 # que ningun punto quede debajo de los botones del costado
 
     def __init__(self, accent, parent=None, lang="es"):
         super().__init__([], accent, parent, lang=lang)
