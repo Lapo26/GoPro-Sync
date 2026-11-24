@@ -18,6 +18,8 @@ En **[Releases](https://github.com/Lapo26/GoPro-Sync/releases/latest)**:
 - `GoProSync-X.Y.Z-macOS-arm64.dmg`: **macOS** (Apple Silicon, M1 o posterior). Abrís el .dmg y arrastrás GoPro Sync a *Aplicaciones*. La app no está firmada por Apple: la primera vez, clic derecho sobre la app → **Abrir** → **Abrir**.
 - `GoProSync-X.Y.Z-Linux-x86_64.AppImage`: **Linux** (Ubuntu 22.04+, Fedora 36+, Debian 12+ y similares). Le das permiso de ejecución (`chmod +x GoProSync-*.AppImage`) y la abrís.
 
+Las versiones de macOS y Linux se compilan aparte y no siempre están en la última versión: si falta, está en una anterior.
+
 **Actualizaciones:** la app busca versiones nuevas al iniciar. Si hay una, aparece **Actualizar a X.Y.Z** en el menú lateral y se instala con un clic. Se puede desactivar en *Ajustes*.
 
 La configuración y la caché de miniaturas se conservan entre versiones. Se guardan en `%APPDATA%\GoProSyncPro` (Windows), `~/Library/Application Support/GoProSyncPro` (macOS) o `~/.config/GoProSyncPro` (Linux).

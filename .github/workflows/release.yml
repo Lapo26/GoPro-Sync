@@ -1,9 +1,14 @@
 name: Build y release
 
-# - Al subir un tag vX.Y.Z (lo hace release.ps1): compila para Windows, macOS
-#   y Linux y publica el Release en GitHub con los instaladores.
-# - "Run workflow" manual en la pestaña Actions: solo compila y deja los
-#   archivos como artefactos descargables (para probar sin publicar).
+# - Al subir un tag vX.Y.Z (lo hace release.ps1): compila solo Windows y
+#   publica el Release en GitHub con el instalador (unos 4 minutos; las
+#   maquinas Mac de GitHub a veces tardan mas de 15 minutos en aparecer).
+# - "Run workflow" manual en la pestaña Actions, con la casilla "Tambien Mac
+#   y Linux" si se quieren esas versiones:
+#     - desde main: solo compila y deja los archivos como artefactos (probar sin publicar);
+#     - desde un tag (Use workflow from > Tags > vX.Y.Z): ademas los agrega a ese Release.
+#   El codigo sigue siendo para las tres plataformas: conviene compilarlas de
+#   vez en cuando para ver que no se rompio nada.
 #
 # Seguridad:
 # - Actions fijadas por SHA; dependencias de Python fijadas con hash (requirements.lock).
@@ -16,6 +21,11 @@ on:
   push:
     tags: ["v*.*.*"]
   workflow_dispatch:
+    inputs:
+      todas:
+        description: "Tambien Mac y Linux"
+        type: boolean
+        default: false
 
 # Solo lectura por defecto; el job "release" pide escritura para publicar.
 permissions:
@@ -87,6 +97,7 @@ jobs:
           if-no-files-found: error
 
   macos:
+    if: github.event_name == 'workflow_dispatch' && inputs.todas
     runs-on: macos-latest      # Apple Silicon (M1 y posteriores)
     permissions:
       contents: read
@@ -113,6 +124,7 @@ jobs:
           if-no-files-found: error
 
   linux:
+    if: github.event_name == 'workflow_dispatch' && inputs.todas
     runs-on: ubuntu-22.04      # glibc 2.35: corre en Ubuntu 22.04+, Fedora 36+, Debian 12+...
     permissions:
       contents: read
@@ -145,7 +157,12 @@ jobs:
           if-no-files-found: error
 
   release:
-    if: startsWith(github.ref, 'refs/tags/')
+    # Mac y Linux pueden no haberse pedido (skipped): se publica igual con lo que haya.
+    if: >-
+      always() && startsWith(github.ref, 'refs/tags/')
+      && needs.windows.result == 'success'
+      && needs.macos.result != 'failure' && needs.macos.result != 'cancelled'
+      && needs.linux.result != 'failure' && needs.linux.result != 'cancelled'
     needs: [windows, macos, linux]
     runs-on: ubuntu-latest
     permissions:
@@ -160,5 +177,10 @@ jobs:
           TAG_NAME: ${{ github.ref_name }}
           REPO: ${{ github.repository }}
         run: |
-          gh release create "$TAG_NAME" out/*/* --repo "$REPO" \
-            --title "GoPro Sync $TAG_NAME" --generate-notes
+          if gh release view "$TAG_NAME" --repo "$REPO" > /dev/null 2>&1; then
+            # ya publicado (p. ej. se agregan Mac y Linux despues)
+            gh release upload "$TAG_NAME" out/*/* --repo "$REPO" --clobber
+          else
+            gh release create "$TAG_NAME" out/*/* --repo "$REPO" \
+              --title "GoPro Sync $TAG_NAME" --generate-notes
+          fi

@@ -7,8 +7,9 @@
   Que hace:
     1. Comprueba que estas en "main", sin cambios pendientes y al dia con GitHub.
     2. Cambia APP_VERSION en app\gopro_sync\version.py, hace commit "Release v1.1.0" y crea el tag v1.1.0.
-    3. Sube main y el tag. GitHub Actions compila para Windows, macOS y Linux y
-       publica el Release con los instaladores (tarda ~10 min).
+    3. Sube main y el tag. GitHub Actions compila Windows y publica el Release
+       con el instalador (tarda ~4 min). Mac y Linux se agregan a mano desde
+       Actions > Build y release > Run workflow (desde el tag, con "Tambien Mac y Linux").
 #>
 param(
     [Parameter(Mandatory = $true)][string]$Version
